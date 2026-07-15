@@ -1,0 +1,2690 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="基于 Codex 源码，从 World projection 与 State transition 解释 Agent Loop、MCP、Skill、Subagent、Hooks 与 Loop Engineering。">
+  <title>Agent 如何工作：基于 Codex 的实现分析</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f7f6f2;
+      --surface: #ffffff;
+      --ink: #17283d;
+      --muted: #607184;
+      --line: #d9e0e5;
+      --teal: #0f766e;
+      --teal-2: #e6f4f0;
+      --blue: #315f94;
+      --blue-2: #eaf1fb;
+      --orange: #ad4d23;
+      --orange-2: #fff1e7;
+      --navy: #17283d;
+      --code: #112033;
+      --shadow: 0 18px 50px rgba(23, 40, 61, .08);
+      --radius: 22px;
+      --measure: 76ch;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; background: var(--paper); }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 3%, rgba(15, 118, 110, .08), transparent 26rem),
+        radial-gradient(circle at 92% 18%, rgba(49, 95, 148, .07), transparent 30rem),
+        var(--paper);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 17px;
+      line-height: 1.78;
+      text-rendering: optimizeLegibility;
+    }
+
+    a { color: inherit; }
+    code, pre, .mono {
+      font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    }
+    code {
+      padding: .12em .35em;
+      color: #174d49;
+      background: rgba(15, 118, 110, .09);
+      border-radius: 6px;
+      font-size: .9em;
+    }
+    strong { font-weight: 750; }
+
+    .progress {
+      position: fixed;
+      z-index: 30;
+      inset: 0 0 auto;
+      height: 4px;
+      background: rgba(255,255,255,.7);
+    }
+    .progress > span {
+      display: block;
+      width: 0;
+      height: 100%;
+      background: linear-gradient(90deg, var(--teal), var(--blue), var(--orange));
+      transition: width .1s linear;
+    }
+
+    .page {
+      width: min(1520px, 100%);
+      margin: 0 auto;
+      padding: 28px 34px 80px;
+      display: grid;
+      grid-template-columns: 230px minmax(0, 1fr);
+      gap: 40px;
+    }
+
+    .toc {
+      position: sticky;
+      top: 30px;
+      align-self: start;
+      max-height: calc(100vh - 60px);
+      overflow: auto;
+      padding: 18px 14px;
+      border: 1px solid rgba(115, 133, 149, .22);
+      border-radius: 18px;
+      background: rgba(255, 255, 255, .66);
+      backdrop-filter: blur(14px);
+    }
+    .toc-mark {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 8px 14px;
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    .toc-mark::before {
+      width: 9px;
+      height: 9px;
+      content: "";
+      border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 0 0 5px rgba(15,118,110,.12);
+    }
+    .toc a {
+      display: grid;
+      grid-template-columns: 28px 1fr;
+      gap: 8px;
+      padding: 8px;
+      color: #657486;
+      text-decoration: none;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.35;
+      transition: .2s ease;
+    }
+    .toc a span:first-child {
+      font-family: "SFMono-Regular", Consolas, monospace;
+      color: #98a5b1;
+    }
+    .toc a:hover, .toc a.active {
+      color: var(--ink);
+      background: #fff;
+      box-shadow: 0 5px 16px rgba(23,40,61,.06);
+    }
+    .toc a.active span:first-child { color: var(--teal); }
+
+    .report { min-width: 0; }
+    .hero {
+      width: min(1320px, calc(100% - 68px));
+      min-height: calc(100vh - 56px);
+      margin: 28px auto 0;
+      padding: clamp(42px, 7vw, 94px) clamp(28px, 6vw, 88px);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      border-radius: 30px;
+      color: #f8fbff;
+      background: linear-gradient(135deg, #14283d, #17283d);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      position: relative;
+    }
+    h1 {
+      max-width: 880px;
+      margin: 0;
+      font-size: clamp(42px, 5.4vw, 80px);
+      line-height: 1.08;
+      letter-spacing: -.045em;
+      position: relative;
+      z-index: 1;
+    }
+    .hero-positioning {
+      max-width: 780px;
+      margin: 0 0 18px;
+      color: #b9c9d8;
+      font-size: clamp(15px, 1.25vw, 18px);
+      font-weight: 750;
+      letter-spacing: .08em;
+      position: relative;
+      z-index: 1;
+    }
+    .hero .lede {
+      max-width: 780px;
+      margin: 22px 0 0;
+      color: #80e1d1;
+      font-size: clamp(18px, 1.7vw, 23px);
+      font-weight: 650;
+      line-height: 1.5;
+      position: relative;
+      z-index: 1;
+    }
+    .thesis {
+      max-width: 820px;
+      margin: 68px 0 0;
+      padding: 28px 0 0;
+      border-top: 1px solid rgba(255,255,255,.20);
+      color: #dce8f3;
+      font-size: clamp(19px, 1.75vw, 24px);
+      line-height: 1.6;
+      position: relative;
+      z-index: 1;
+    }
+
+    .chapter {
+      scroll-margin-top: 28px;
+      margin-top: 42px;
+      padding: clamp(34px, 5vw, 68px);
+      border: 1px solid rgba(115, 133, 149, .18);
+      border-radius: 28px;
+      background: rgba(255,255,255,.88);
+      box-shadow: 0 12px 38px rgba(23,40,61,.045);
+    }
+    .chapter-head {
+      display: grid;
+      grid-template-columns: 68px minmax(0, 1fr);
+      gap: 22px;
+      align-items: start;
+      margin-bottom: 30px;
+    }
+    .chapter-no {
+      padding-top: 8px;
+      color: var(--teal);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      border-top: 3px solid currentColor;
+    }
+    h2 {
+      margin: 0;
+      font-size: clamp(30px, 4vw, 50px);
+      line-height: 1.18;
+      letter-spacing: -.035em;
+    }
+    h3 {
+      margin: 0 0 12px;
+      font-size: 21px;
+      line-height: 1.35;
+    }
+    .chapter-intro {
+      max-width: var(--measure);
+      margin: 0 0 28px 90px;
+      color: var(--muted);
+      font-size: 19px;
+    }
+    p { max-width: var(--measure); }
+    .big-claim {
+      margin: 32px 0;
+      padding: 24px 28px;
+      border-radius: 18px;
+      color: #f8fbff;
+      background: var(--navy);
+      font-size: clamp(20px, 2.2vw, 28px);
+      line-height: 1.55;
+    }
+    .big-claim em { color: #80e1d1; font-style: normal; }
+
+    .grid-2, .grid-3, .grid-4, .grid-5 {
+      display: grid;
+      gap: 18px;
+    }
+    .grid-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .grid-5 { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+    .card {
+      min-width: 0;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fff;
+    }
+    .card p { margin: 0; color: var(--muted); font-size: 15px; }
+    .card.teal { border-color: #a8d2cb; background: #f1f9f7; }
+    .card.blue { border-color: #b7cbe4; background: #f3f7fc; }
+    .card.orange { border-color: #edc2aa; background: #fff8f3; }
+    .tag {
+      display: inline-flex;
+      margin-bottom: 12px;
+      padding: 4px 9px;
+      border-radius: 999px;
+      color: var(--teal);
+      background: var(--teal-2);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: .05em;
+    }
+    .tag.blue { color: var(--blue); background: var(--blue-2); }
+    .tag.orange { color: var(--orange); background: var(--orange-2); }
+
+    .minimal-loop-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.04fr) minmax(0, .96fr);
+      gap: 20px;
+      align-items: stretch;
+      margin-top: 24px;
+    }
+    .loop-code {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      border: 1px solid #263e57;
+      border-radius: 20px;
+      color: #dce8f3;
+      background: var(--code);
+      overflow: hidden;
+      box-shadow: inset 0 1px rgba(255,255,255,.05);
+    }
+    .loop-code-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 12px 18px;
+      color: #9db0c2;
+      background: #182b40;
+      border-bottom: 1px solid #2b425b;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      font-weight: 750;
+      letter-spacing: .07em;
+    }
+    .loop-code-head span:first-child { color: #80e1d1; }
+    .loop-code pre {
+      flex: 1;
+      padding: 24px 22px 18px;
+      font-size: clamp(12px, 1.15vw, 14px);
+      line-height: 1.9;
+    }
+    .loop-code .code-kw { color: #8ab4f8; }
+    .loop-code .code-llm { color: #a9c9ff; }
+    .loop-code .code-runtime { color: #ffd1b8; }
+    .loop-code .code-state { color: #80e1d1; }
+    .loop-code .code-cm { color: #7890a5; }
+    .loop-gloss {
+      max-width: none;
+      margin: 0;
+      padding: 15px 18px 17px;
+      border-top: 1px solid #2b425b;
+      color: #aebfce;
+      background: #16283c;
+      font-size: 13px;
+      line-height: 1.65;
+    }
+    .loop-gloss code {
+      color: #80e1d1;
+      background: rgba(128,225,209,.08);
+    }
+    .react-figure {
+      display: flex;
+      min-width: 0;
+      flex-direction: column;
+      justify-content: center;
+      margin: 0;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--paper);
+      overflow: hidden;
+    }
+    .react-figure svg {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    .react-figure figcaption {
+      margin: 8px 8px 3px;
+    }
+    .loop-claim {
+      margin: 18px 0 0;
+      padding: 18px 24px;
+      border-radius: 18px;
+      color: #f8fbff;
+      background: var(--navy);
+      font-size: clamp(18px, 2vw, 25px);
+      line-height: 1.55;
+    }
+    .loop-claim strong { color: #80e1d1; }
+
+    .clean-list {
+      margin: 12px 0 0;
+      padding-left: 1.2em;
+    }
+    .clean-list li { margin: 7px 0; }
+
+    .formal-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(300px, .65fr);
+      gap: 20px;
+      align-items: stretch;
+      margin-top: 24px;
+    }
+    .formal-model,
+    .formal-terms {
+      min-width: 0;
+      border-radius: 20px;
+      overflow: hidden;
+    }
+    .formal-model {
+      padding: 22px 24px;
+      color: #dce8f3;
+      background: var(--code);
+      border: 1px solid #263e57;
+    }
+    .formal-label {
+      margin-bottom: 14px;
+      color: #80e1d1;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .09em;
+    }
+    .formal-transition {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      margin-bottom: 14px;
+      padding: 14px 16px;
+      border: 1px solid #38516b;
+      border-radius: 15px;
+      color: #ffffff;
+      background: #182b40;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: clamp(17px, 1.65vw, 22px);
+      font-weight: 720;
+    }
+    .formal-transition .arrow { color: #80e1d1; }
+    .formal-rows { border-top: 1px solid #2b425b; }
+    .formal-row {
+      display: grid;
+      grid-template-columns: minmax(0, .92fr) minmax(0, 1.08fr);
+      gap: 16px;
+      align-items: center;
+      padding: 11px 2px;
+      border-bottom: 1px solid #2b425b;
+    }
+    .formal-equation {
+      color: #f6fbff;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: clamp(14px, 1.25vw, 17px);
+      line-height: 1.45;
+    }
+    .formal-equation.teal { color: #80e1d1; }
+    .formal-equation.blue { color: #a9c9ff; }
+    .formal-equation.orange { color: #ffd1b8; }
+    .formal-equation .equation-line { display: block; }
+    .formal-code-map {
+      min-width: 0;
+      color: #91a5b8;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11.5px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .formal-code-map::before {
+      margin-right: 7px;
+      color: #5f768c;
+      content: "↔";
+    }
+    .formal-terms {
+      padding: 20px;
+      border: 1px solid var(--line);
+      background: var(--paper);
+    }
+    .formal-terms h3 {
+      margin: 0 0 10px;
+      color: var(--muted);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .1em;
+    }
+    .formal-terms h3:not(:first-child) { margin-top: 17px; }
+    .term-list {
+      display: grid;
+      gap: 7px;
+      margin: 0;
+    }
+    .term-item {
+      display: grid;
+      grid-template-columns: 48px minmax(0, 1fr);
+      gap: 10px;
+      align-items: start;
+      padding-bottom: 7px;
+      border-bottom: 1px solid #e2e7ea;
+    }
+    .term-item:last-child { border-bottom: 0; padding-bottom: 0; }
+    .term-item dt {
+      color: var(--teal);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 15px;
+      font-weight: 800;
+    }
+    .term-item dd {
+      margin: 0;
+      color: #526273;
+      font-size: 13px;
+      line-height: 1.55;
+    }
+    .operator-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .operator-item {
+      padding: 9px 10px;
+      border-radius: 11px;
+      background: #edf1f3;
+      color: #526273;
+      font-size: 12px;
+      line-height: 1.45;
+    }
+    .operator-item b {
+      display: block;
+      margin-bottom: 2px;
+      color: var(--ink);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 14px;
+    }
+    .formal-claim {
+      margin: 18px 0 0;
+      padding: 18px 24px;
+      border-radius: 18px;
+      color: #f8fbff;
+      background: var(--navy);
+      font-size: clamp(18px, 2vw, 25px);
+      line-height: 1.55;
+    }
+    .formal-claim strong { color: #80e1d1; }
+
+    /* Chapter 03–05: state projection and observation write-back */
+    .diagram-kicker {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--teal);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .09em;
+    }
+    .diagram-kicker::before {
+      width: 8px;
+      height: 8px;
+      content: "";
+      border-radius: 50%;
+      background: currentColor;
+      box-shadow: 0 0 0 5px rgba(15,118,110,.1);
+    }
+
+    .state-api-figure,
+    .implementation-figure {
+      margin: 28px 0 18px;
+      padding: 22px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--paper);
+      overflow: hidden;
+    }
+    .state-api-grid {
+      display: grid;
+      grid-template-columns: minmax(210px, .78fr) minmax(250px, 1fr) minmax(320px, 1.22fr);
+      grid-template-areas:
+        "before read model"
+        ". . bridge"
+        "after write observation";
+      gap: 14px 18px;
+      align-items: stretch;
+      margin-top: 18px;
+    }
+    .state-snapshot,
+    .model-input-card,
+    .observation-card {
+      min-width: 0;
+      padding: 20px;
+      border-radius: 18px;
+    }
+    .state-snapshot {
+      color: #f8fbff;
+      background: var(--navy);
+      border: 1px solid #314861;
+    }
+    .state-before { grid-area: before; }
+    .state-after {
+      grid-area: after;
+      color: #153f3b;
+      background: #dff1ec;
+      border-color: #93c6bc;
+    }
+    .state-snapshot .diagram-label,
+    .model-input-card .diagram-label,
+    .observation-card .diagram-label {
+      display: block;
+      margin-bottom: 8px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 800;
+      letter-spacing: .08em;
+      opacity: .72;
+    }
+    .state-snapshot h3,
+    .model-input-card h3,
+    .observation-card h3 {
+      margin-bottom: 12px;
+      font-size: 22px;
+    }
+    .state-snapshot h3 { color: #80e1d1; }
+    .state-after h3 { color: var(--teal); }
+    .state-chip-row,
+    .input-chip-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+    }
+    .state-chip-row span,
+    .input-chip-row span {
+      padding: 4px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      line-height: 1.4;
+    }
+    .state-before .state-chip-row span {
+      color: #dce8f3;
+      background: #263b55;
+    }
+    .state-after .state-chip-row span {
+      color: #285b56;
+      background: rgba(255,255,255,.72);
+      border: 1px solid #acd0c9;
+    }
+    .state-api-link {
+      min-width: 0;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 16px 18px;
+      border-radius: 18px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+    .state-api-link.read-link { grid-area: read; border-color: #aebfdd; background: #f4f7fc; }
+    .state-api-link.write-link { grid-area: write; border-color: #9ccbc3; background: #f1f9f7; }
+    .state-api-link span {
+      display: block;
+      margin-bottom: 5px;
+      color: var(--muted);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 10px;
+      font-weight: 800;
+      letter-spacing: .08em;
+    }
+    .state-api-link code {
+      display: block;
+      padding: 0;
+      color: var(--ink);
+      background: transparent;
+      font-size: clamp(12px, 1.1vw, 15px);
+      font-weight: 750;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .state-api-link .api-arrow {
+      color: var(--blue);
+      font-size: 28px;
+      line-height: 1;
+    }
+    .state-api-link.write-link .api-arrow { color: var(--teal); }
+    .model-input-card {
+      grid-area: model;
+      color: #17395f;
+      background: #eaf1fb;
+      border: 1px solid #abc2df;
+    }
+    .model-input-card .input-chip-row span {
+      color: #315f94;
+      background: rgba(255,255,255,.78);
+      border: 1px solid #bfd0e5;
+      font-family: "SFMono-Regular", Consolas, monospace;
+    }
+    .runtime-bridge {
+      grid-area: bridge;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      padding: 10px 14px;
+      color: #526273;
+      border-radius: 14px;
+      background: #edf1f3;
+      font-size: 12px;
+      font-weight: 700;
+    }
+    .runtime-bridge b {
+      padding: 4px 9px;
+      color: #fff;
+      border-radius: 999px;
+      background: var(--navy);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11px;
+    }
+    .runtime-bridge .world-pill { background: var(--orange); }
+    .runtime-bridge i { color: #8594a2; font-style: normal; }
+    .observation-card {
+      grid-area: observation;
+      color: #713c25;
+      background: #fff1e7;
+      border: 1px solid #e8b99e;
+    }
+    .observation-card p {
+      margin: 0;
+      color: #765447;
+      font-size: 13px;
+      line-height: 1.6;
+    }
+    .api-contracts {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin-top: 18px;
+    }
+    .api-contract {
+      min-width: 0;
+      padding: 20px 22px;
+      border-radius: 18px;
+      background: #fff;
+      border: 1px solid var(--line);
+    }
+    .api-contract:first-child { border-top: 4px solid var(--blue); }
+    .api-contract:last-child { border-top: 4px solid var(--teal); }
+    .api-contract h3 {
+      margin-bottom: 8px;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 16px;
+    }
+    .api-contract p { margin: 0; color: var(--muted); font-size: 14px; }
+    .state-interface-claim {
+      margin: 18px 0 0;
+      padding: 18px 22px;
+      color: #f8fbff;
+      border-radius: 18px;
+      background: var(--navy);
+      font-size: clamp(18px, 1.8vw, 23px);
+      line-height: 1.55;
+    }
+    .state-interface-claim strong { color: #80e1d1; }
+
+    .implementation-fact {
+      margin: 0 0 20px 90px;
+      padding: 15px 18px;
+      border-left: 4px solid var(--blue);
+      border-radius: 0 14px 14px 0;
+      color: #43566a;
+      background: #f2f6fb;
+      font-size: 15px;
+    }
+    .implementation-fact strong { color: #17395f; }
+    .snapshot-banner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      margin: 16px 0 14px;
+      padding: 13px 16px;
+      color: #dce8f3;
+      border-radius: 14px;
+      background: var(--navy);
+      font-size: 13px;
+    }
+    .snapshot-banner code {
+      color: #80e1d1;
+      background: rgba(128,225,209,.08);
+    }
+    .implementation-flow {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      align-items: stretch;
+    }
+    .implementation-step {
+      min-width: 0;
+      position: relative;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+    }
+    .implementation-step:not(:last-child)::after {
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      right: -14px;
+      content: "→";
+      color: var(--teal);
+      font-size: 19px;
+      font-weight: 850;
+      transform: translateY(-50%);
+    }
+    .implementation-step .step-no {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--blue);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 10px;
+      font-weight: 850;
+      letter-spacing: .09em;
+    }
+    .implementation-step h3 { margin-bottom: 9px; font-size: 17px; }
+    .implementation-step > code {
+      display: block;
+      margin-bottom: 10px;
+      padding: 8px 9px;
+      color: #174d49;
+      background: #edf6f4;
+      font-size: 11px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .implementation-step p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.55; }
+    .implementation-step.assemble-step {
+      color: #f8fbff;
+      background: var(--navy);
+      border-color: #314861;
+    }
+    .implementation-step.assemble-step .step-no { color: #80e1d1; }
+    .implementation-step.assemble-step h3 { color: #fff; }
+    .implementation-step.assemble-step > code {
+      color: #80e1d1;
+      background: #263b55;
+    }
+    .implementation-step.assemble-step p { color: #c9d6e4; }
+    .projection-branches {
+      display: grid;
+      gap: 7px;
+      margin-top: 10px;
+    }
+    .projection-branch {
+      padding: 8px 9px;
+      border-radius: 10px;
+      color: #43566a;
+      background: #f0f3f5;
+      font-size: 11px;
+      line-height: 1.45;
+    }
+    .projection-branch b {
+      display: block;
+      color: var(--ink);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 10.5px;
+    }
+    .source-evidence-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+      margin: 20px 0;
+    }
+    .source-evidence-grid .source-block { min-width: 0; margin: 0; }
+    .source-evidence-grid pre { padding: 18px; font-size: 11.5px; line-height: 1.65; }
+    .projection-insight,
+    .writeback-insight {
+      margin-top: 18px;
+      padding: 18px 21px;
+      border: 1px solid #9fc9c1;
+      border-radius: 16px;
+      color: #285b56;
+      background: #eef8f5;
+      font-size: 15px;
+      line-height: 1.65;
+    }
+    .projection-insight strong,
+    .writeback-insight strong { color: #153f3b; }
+    .implementation-boundary {
+      margin-top: 14px;
+      color: var(--muted);
+      font-size: 13px;
+      line-height: 1.65;
+    }
+
+    .writeback-entry {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      margin: 16px 0 14px;
+      padding: 14px 16px;
+      color: #f8fbff;
+      border-radius: 14px;
+      background: var(--navy);
+    }
+    .writeback-entry code {
+      color: #ffd1b8;
+      background: rgba(255,209,184,.08);
+      overflow-wrap: anywhere;
+    }
+    .writeback-entry span { color: #b8c8d7; font-size: 12px; }
+    .writeback-track {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 11px;
+      align-items: stretch;
+    }
+    .writeback-step {
+      min-width: 0;
+      position: relative;
+      padding: 17px 15px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: #fff;
+    }
+    .writeback-step:not(:last-child)::after {
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      right: -13px;
+      content: "→";
+      color: var(--orange);
+      font-size: 18px;
+      font-weight: 850;
+      transform: translateY(-50%);
+    }
+    .writeback-step.write-step {
+      border-color: #97c8bf;
+      border-top: 4px solid var(--teal);
+      background: #f1f9f7;
+    }
+    .writeback-step.world-step {
+      border-color: #e7b28f;
+      background: #fff8f3;
+    }
+    .writeback-step.next-state-step {
+      color: #f8fbff;
+      background: var(--navy);
+      border-color: #314861;
+    }
+    .writeback-step .write-tag {
+      display: inline-flex;
+      margin-bottom: 9px;
+      padding: 3px 7px;
+      color: var(--teal);
+      border-radius: 999px;
+      background: #dcefe9;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 9px;
+      font-weight: 850;
+      letter-spacing: .08em;
+    }
+    .writeback-step .phase-tag {
+      display: block;
+      margin-bottom: 9px;
+      color: var(--orange);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 9px;
+      font-weight: 850;
+      letter-spacing: .08em;
+    }
+    .writeback-step.next-state-step .phase-tag { color: #80e1d1; }
+    .writeback-step h3 { margin-bottom: 8px; font-size: 15px; }
+    .writeback-step code {
+      display: block;
+      margin-bottom: 8px;
+      padding: 0;
+      color: #174d49;
+      background: transparent;
+      font-size: 10.5px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+    }
+    .writeback-step p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+    .writeback-step.next-state-step h3 { color: #fff; }
+    .writeback-step.next-state-step code { color: #80e1d1; }
+    .writeback-step.next-state-step p { color: #c9d6e4; }
+    .observation-separation {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      align-items: center;
+      margin-top: 15px;
+    }
+    .observation-separation span {
+      position: relative;
+      padding: 10px 12px;
+      color: #526273;
+      border-radius: 11px;
+      background: #edf1f3;
+      text-align: center;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .observation-separation span:not(:last-child)::after {
+      position: absolute;
+      right: -8px;
+      color: var(--orange);
+      content: "≠";
+      font-weight: 900;
+    }
+
+    .figure {
+      margin: 34px 0 12px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--paper);
+      overflow: hidden;
+    }
+    .figure img, .figure svg {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+    figcaption {
+      max-width: 90ch;
+      margin: 12px 4px 2px;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.65;
+    }
+
+    .warning {
+      margin: 28px 0;
+      padding: 22px 24px;
+      border: 1px solid #e7b28f;
+      border-left: 5px solid var(--orange);
+      border-radius: 16px;
+      background: #fff8f3;
+    }
+    .warning strong { color: #8f3e1c; }
+
+    .equations {
+      display: grid;
+      gap: 2px;
+      margin: 30px 0;
+      padding: 24px 28px;
+      border-radius: 18px;
+      color: #dce8f3;
+      background: var(--code);
+      overflow: auto;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: clamp(14px, 1.7vw, 19px);
+      line-height: 1.85;
+    }
+    .equations .comment { color: #7fa193; }
+
+    .source-block {
+      margin: 24px 0;
+      border: 1px solid #2b425b;
+      border-radius: 18px;
+      overflow: hidden;
+      background: var(--code);
+    }
+    .source-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 11px 16px;
+      color: #9db0c2;
+      background: #182b40;
+      border-bottom: 1px solid #2b425b;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+    }
+    pre {
+      margin: 0;
+      padding: 22px;
+      color: #dce8f3;
+      background: transparent;
+      overflow: auto;
+      font-size: 13px;
+      line-height: 1.75;
+      tab-size: 2;
+    }
+    pre .kw { color: #8ab4f8; }
+    pre .fn { color: #80e1d1; }
+    pre .ty { color: #ffd1b8; }
+    pre .cm { color: #7890a5; }
+
+    .request-anatomy {
+      display: grid;
+      grid-template-columns: 1.4fr repeat(3, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 22px;
+    }
+    .request-anatomy > div {
+      padding: 18px;
+      border-radius: 16px;
+      background: #f2f5f7;
+    }
+    .request-anatomy b { display: block; margin-bottom: 8px; font-family: "SFMono-Regular", Consolas, monospace; }
+    .request-anatomy p { margin: 0; color: var(--muted); font-size: 14px; }
+
+    .source-flow {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 9px;
+      margin: 30px 0;
+    }
+    .source-step {
+      min-width: 0;
+      position: relative;
+      padding: 18px 13px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      font-size: 13px;
+    }
+    .source-step:not(:last-child)::after {
+      position: absolute;
+      z-index: 2;
+      top: 50%;
+      right: -12px;
+      content: "→";
+      color: var(--teal);
+      font-weight: 800;
+      transform: translateY(-50%);
+    }
+    .source-step b { display: block; margin-bottom: 6px; color: var(--teal); font-family: "SFMono-Regular", Consolas, monospace; }
+    .source-step span { color: var(--muted); }
+
+    .operator {
+      min-height: 188px;
+      padding: 20px;
+      border-top: 4px solid var(--teal);
+      border-radius: 15px;
+      background: #f4f7f7;
+    }
+    .operator:nth-child(2) { border-color: #298b7d; }
+    .operator:nth-child(3) { border-color: var(--blue); }
+    .operator:nth-child(4) { border-color: #6b78a6; }
+    .operator:nth-child(5) { border-color: var(--orange); }
+    .operator h3 { font-family: "SFMono-Regular", Consolas, monospace; font-size: 17px; }
+    .operator p { margin: 0; color: var(--muted); font-size: 14px; }
+
+    .continuation {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 60px minmax(0, 1fr) 60px minmax(0, 1fr);
+      gap: 12px;
+      align-items: center;
+      margin: 28px 0;
+    }
+    .continuation .node {
+      min-height: 150px;
+      display: grid;
+      place-content: center;
+      padding: 20px;
+      text-align: center;
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fff;
+    }
+    .continuation .node b { display: block; font-size: 20px; }
+    .continuation .node span { color: var(--muted); font-size: 14px; }
+    .continuation .arrow { color: var(--teal); text-align: center; font-size: 28px; }
+
+    .failure {
+      min-height: 230px;
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: #fff;
+    }
+    .failure .num {
+      color: var(--orange);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .failure h3 { margin-top: 12px; font-size: 18px; }
+    .failure p { margin: 0; color: var(--muted); font-size: 14px; }
+    .failure .question {
+      margin-top: 14px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      color: var(--ink);
+      font-weight: 650;
+    }
+
+    .boundary {
+      display: grid;
+      grid-template-columns: 1fr 70px 1fr;
+      gap: 18px;
+      align-items: stretch;
+      margin: 30px 0;
+    }
+    .boundary > div:not(.bridge-arrow) {
+      padding: 28px;
+      border-radius: 20px;
+    }
+    .boundary .codex { color: #f7fbff; background: var(--navy); }
+    .boundary .agentdb { border: 1px solid #9ccbc3; background: var(--teal-2); }
+    .boundary ul { margin: 16px 0 0; padding-left: 1.2em; }
+    .bridge-arrow { display: grid; place-content: center; color: var(--orange); font-size: 34px; }
+
+    .source-list {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      border-top: 1px solid var(--line);
+    }
+    .source-list li {
+      display: grid;
+      grid-template-columns: minmax(220px, .8fr) 1.5fr;
+      gap: 24px;
+      padding: 16px 0;
+      border-bottom: 1px solid var(--line);
+    }
+    .source-list code { overflow-wrap: anywhere; }
+    .source-list span { color: var(--muted); }
+
+    /* Chapter 06–11: feature evolution and state-runtime extensions */
+    .feature-figure {
+      margin: 28px 0 18px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 22px;
+      background: var(--paper);
+      overflow: hidden;
+    }
+    .feature-figure img {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 16px;
+    }
+    .feature-figure.subagent {
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
+      margin: 0;
+    }
+    .feature-figure.subagent figcaption { margin-top: 12px; }
+    .timeline-sources {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin: 14px 0 0;
+    }
+    .timeline-sources a {
+      padding: 6px 10px;
+      color: #526273;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      text-decoration: none;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .timeline-sources a:hover { color: var(--teal); border-color: #9ccbc3; }
+
+    .state-ops-grid {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 12px;
+      margin: 26px 0 18px;
+    }
+    .state-op {
+      min-width: 0;
+      padding: 19px 17px;
+      border: 1px solid var(--line);
+      border-top: 4px solid var(--blue);
+      border-radius: 17px;
+      background: #fff;
+    }
+    .state-op:nth-child(2) { border-top-color: #6b78a6; }
+    .state-op:nth-child(3) { border-top-color: var(--teal); }
+    .state-op:nth-child(4) { border-top-color: var(--orange); }
+    .state-op:nth-child(5) { color: #f8fbff; border-color: var(--navy); background: var(--navy); }
+    .state-op .op-name {
+      display: block;
+      margin-bottom: 10px;
+      color: var(--blue);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: .08em;
+    }
+    .state-op:nth-child(2) .op-name { color: #6b78a6; }
+    .state-op:nth-child(3) .op-name { color: var(--teal); }
+    .state-op:nth-child(4) .op-name { color: var(--orange); }
+    .state-op:nth-child(5) .op-name { color: #80e1d1; }
+    .state-op h3 { margin-bottom: 8px; font-size: 18px; }
+    .state-op p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .state-op:nth-child(5) p { color: #c9d6e4; }
+    .op-pills { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 13px; }
+    .op-pills span {
+      padding: 3px 7px;
+      color: #526273;
+      border-radius: 999px;
+      background: #edf1f3;
+      font-size: 10px;
+      line-height: 1.3;
+    }
+    .state-op:nth-child(5) .op-pills span { color: #dce8f3; background: #263b55; }
+    .projection-bar {
+      display: grid;
+      grid-template-columns: 125px minmax(0, 1fr);
+      gap: 20px;
+      align-items: center;
+      margin-top: 18px;
+      padding: 20px 22px;
+      color: #f8fbff;
+      border-radius: 18px;
+      background: var(--navy);
+    }
+    .projection-bar span {
+      color: #80e1d1;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      font-weight: 850;
+      letter-spacing: .08em;
+    }
+    .projection-bar code {
+      padding: 0;
+      color: #fff;
+      background: transparent;
+      font-size: clamp(14px, 1.7vw, 20px);
+      font-weight: 720;
+    }
+    .state-boundary-note {
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .feature-example-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.14fr) minmax(300px, .86fr);
+      gap: 18px;
+      align-items: stretch;
+      margin: 24px 0 18px;
+    }
+    #subagent-extension .feature-example-grid {
+      grid-template-columns: minmax(0, 1fr) minmax(340px, 1fr);
+    }
+    .feature-code pre { font-size: 12px; line-height: 1.76; }
+    .feature-code .code-add {
+      display: inline-block;
+      width: 100%;
+      margin: 1px 0;
+      padding: 0 7px;
+      color: #80e1d1;
+      border-left: 3px solid #80e1d1;
+      background: rgba(128,225,209,.09);
+    }
+    .feature-code .code-add.orange {
+      color: #ffd1b8;
+      border-left-color: #ffd1b8;
+      background: rgba(255,209,184,.08);
+    }
+    .feature-code .stable-core {
+      display: inline-block;
+      width: 100%;
+      padding: 1px 7px;
+      color: #a9c9ff;
+      border: 1px solid #4c6e94;
+      border-radius: 7px;
+      background: rgba(138,180,248,.08);
+    }
+    .state-diff-panel {
+      min-width: 0;
+      display: grid;
+      gap: 12px;
+      padding: 18px;
+      border: 1px solid var(--line);
+      border-radius: 20px;
+      background: var(--paper);
+    }
+    .state-diff-card {
+      padding: 17px;
+      border: 1px solid #c7d1d9;
+      border-radius: 15px;
+      background: #fff;
+    }
+    .state-diff-card.after { border-color: #93c6bc; background: #eef8f5; }
+    .state-diff-card .diff-label {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--muted);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 10px;
+      font-weight: 850;
+      letter-spacing: .08em;
+    }
+    .state-diff-card.after .diff-label { color: var(--teal); }
+    .state-tree {
+      margin: 0;
+      padding: 0;
+      color: #43566a;
+      background: transparent;
+      overflow: visible;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11.5px;
+      line-height: 1.72;
+      white-space: pre-wrap;
+    }
+    .state-diff-arrow {
+      color: var(--orange);
+      text-align: center;
+      font-size: 24px;
+      line-height: 1;
+    }
+    .scenario-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 11px;
+      margin: 18px 0;
+    }
+    .scenario-step {
+      min-width: 0;
+      position: relative;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: #fff;
+    }
+    .scenario-step:not(:last-child)::after {
+      position: absolute;
+      z-index: 2;
+      right: -11px;
+      top: 50%;
+      content: "→";
+      color: var(--teal);
+      font-weight: 850;
+      transform: translateY(-50%);
+    }
+    .scenario-step b { display: block; margin-bottom: 6px; color: var(--teal); font-size: 14px; }
+    .scenario-step code { display: block; margin-bottom: 7px; font-size: 10.5px; overflow-wrap: anywhere; }
+    .scenario-step p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+    .skill-contrast {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 14px;
+      margin: 18px 0;
+    }
+    .skill-contrast article {
+      padding: 19px 21px;
+      border: 1px solid #9ccbc3;
+      border-radius: 16px;
+      background: #f1f9f7;
+    }
+    .skill-contrast article:last-child { border-color: #b7cbe4; background: #f3f7fc; }
+    .skill-contrast h3 { margin-bottom: 7px; font-size: 18px; }
+    .skill-contrast p { margin: 0; color: var(--muted); font-size: 13.5px; }
+
+    .subagent-state-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin: 14px 0 20px;
+    }
+    .subagent-state-chips span {
+      padding: 5px 9px;
+      color: #285b56;
+      border: 1px solid #acd0c9;
+      border-radius: 999px;
+      background: #eef8f5;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 10.5px;
+      font-weight: 700;
+    }
+
+    .runtime-definitions {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin: 22px 0;
+    }
+    .runtime-definition {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: #fff;
+    }
+    .runtime-definition:nth-child(1) { border-top: 4px solid var(--blue); }
+    .runtime-definition:nth-child(2) { border-top: 4px solid var(--teal); }
+    .runtime-definition:nth-child(3) { color: #f8fbff; border-color: var(--navy); background: var(--navy); }
+    .runtime-definition h3 { font-size: 19px; }
+    .runtime-definition p { margin: 0; color: var(--muted); font-size: 13px; }
+    .runtime-definition:nth-child(3) p { color: #c9d6e4; }
+    .hook-boundaries {
+      display: grid;
+      grid-template-columns: repeat(5, minmax(0, 1fr));
+      gap: 11px;
+      margin: 20px 0;
+    }
+    .hook-boundary {
+      min-width: 0;
+      padding: 16px 14px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: #fff;
+    }
+    .hook-boundary span {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--orange);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 9.5px;
+      font-weight: 850;
+      letter-spacing: .07em;
+    }
+    .hook-boundary h3 { margin-bottom: 7px; font-size: 15px; }
+    .hook-boundary p { margin: 0; color: var(--muted); font-size: 11.5px; line-height: 1.48; }
+    .policy-state {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 12px;
+    }
+    .policy-state span {
+      padding: 8px 10px;
+      color: #43566a;
+      border-radius: 10px;
+      background: #edf1f3;
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 10.5px;
+      text-align: center;
+    }
+
+    .unified-loop-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.25fr) minmax(270px, .75fr);
+      gap: 18px;
+      align-items: stretch;
+      margin: 24px 0;
+    }
+    .extension-summary {
+      display: grid;
+      gap: 11px;
+    }
+    .extension-summary article {
+      padding: 17px 18px;
+      border: 1px solid var(--line);
+      border-radius: 15px;
+      background: #fff;
+    }
+    .extension-summary article.core { color: #f8fbff; border-color: var(--navy); background: var(--navy); }
+    .extension-summary h3 { margin-bottom: 6px; font-size: 17px; }
+    .extension-summary p { margin: 0; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
+    .extension-summary article.core h3 { color: #80e1d1; }
+    .extension-summary article.core p { color: #c9d6e4; }
+    .feature-mapping {
+      width: 100%;
+      margin: 22px 0;
+      border-collapse: separate;
+      border-spacing: 0;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      overflow: hidden;
+      font-size: 13.5px;
+    }
+    .feature-mapping th,
+    .feature-mapping td { padding: 13px 15px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    .feature-mapping tr:last-child td { border-bottom: 0; }
+    .feature-mapping th { color: #f8fbff; background: var(--navy); font-size: 12px; letter-spacing: .04em; }
+    .feature-mapping td:first-child { color: var(--teal); font-family: "SFMono-Regular", Consolas, monospace; font-weight: 800; }
+    .feature-mapping td:nth-child(2) { color: #43566a; font-family: "SFMono-Regular", Consolas, monospace; font-size: 12px; }
+    .report-sources { margin-top: 30px; }
+    .report-sources h3 { font-size: 18px; }
+    .report-sources .source-list a { color: var(--teal); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+
+    .end-note {
+      margin-top: 42px;
+      padding: clamp(32px, 5vw, 62px);
+      border-radius: 28px;
+      color: #f8fbff;
+      background: linear-gradient(135deg, #153f3b, #17283d);
+    }
+    .end-note p {
+      margin: 0;
+      font-size: clamp(23px, 3vw, 38px);
+      line-height: 1.45;
+      letter-spacing: -.02em;
+    }
+    footer {
+      padding: 34px 10px 8px;
+      color: #778696;
+      font-size: 13px;
+      text-align: center;
+    }
+
+    @media (max-width: 1180px) {
+      .page { grid-template-columns: 190px minmax(0, 1fr); gap: 24px; padding-inline: 22px; }
+      .grid-5 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .source-flow { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .source-step:nth-child(3)::after { display: none; }
+      .request-anatomy { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .state-api-grid { grid-template-columns: minmax(180px, .72fr) minmax(220px, .95fr) minmax(280px, 1.2fr); }
+      .implementation-flow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .implementation-step:nth-child(2)::after { display: none; }
+      .writeback-track { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .writeback-step:nth-child(3)::after { display: none; }
+      .state-ops-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+      .hook-boundaries { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    }
+    @media (max-width: 900px) {
+      .page { display: block; padding: 16px 16px 60px; }
+      .toc { display: none; }
+      .hero { width: calc(100% - 32px); min-height: calc(100vh - 32px); margin-top: 16px; padding-block: 66px; }
+      .chapter { padding: 34px 24px; }
+      .chapter-head { grid-template-columns: 48px 1fr; gap: 14px; }
+      .chapter-intro { margin-left: 62px; }
+      .grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .formal-grid { grid-template-columns: 1fr; }
+      .state-api-grid {
+        grid-template-columns: 1fr;
+        grid-template-areas: "before" "read" "model" "bridge" "observation" "write" "after";
+      }
+      .state-api-link { grid-template-columns: minmax(0, 1fr) auto; }
+      .state-api-link .api-arrow { transform: rotate(90deg); }
+      .state-api-link.write-link .api-arrow { transform: rotate(-90deg); }
+      .api-contracts,
+      .source-evidence-grid,
+      .implementation-flow,
+      .writeback-track { grid-template-columns: 1fr; }
+      .implementation-step::after,
+      .writeback-step::after { display: none !important; }
+      .implementation-fact { margin-left: 62px; }
+      .observation-separation { grid-template-columns: 1fr 1fr; }
+      .observation-separation span::after { display: none; }
+      .boundary { grid-template-columns: 1fr; }
+      .bridge-arrow { transform: rotate(90deg); }
+      .continuation { grid-template-columns: 1fr; }
+      .continuation .arrow { transform: rotate(90deg); }
+      .feature-example-grid,
+      .unified-loop-grid { grid-template-columns: 1fr; }
+      #subagent-extension .feature-example-grid { grid-template-columns: 1fr; }
+      .state-ops-grid,
+      .runtime-definitions { grid-template-columns: 1fr 1fr; }
+      .scenario-strip { grid-template-columns: 1fr 1fr; }
+      .scenario-step::after { display: none; }
+      .hook-boundaries { grid-template-columns: 1fr 1fr; }
+    }
+    @media (max-width: 640px) {
+      body { font-size: 16px; }
+      .page { padding-inline: 10px; }
+      .hero { width: calc(100% - 20px); min-height: calc(100vh - 20px); margin-top: 10px; padding: 50px 24px; border-radius: 22px; }
+      h1 { font-size: 42px; }
+      .hero-positioning { margin-bottom: 15px; font-size: 14px; }
+      .hero .lede { font-size: 18px; }
+      .thesis { margin-top: 44px; padding: 22px 0 0; font-size: 18px; }
+      .chapter { margin-top: 18px; padding: 28px 18px; border-radius: 22px; }
+      .chapter-head { display: block; }
+      .chapter-no { width: 42px; margin-bottom: 14px; }
+      .chapter-intro { margin-left: 0; font-size: 17px; }
+      .grid-2, .grid-3, .grid-4, .grid-5 { grid-template-columns: 1fr; }
+      .minimal-loop-grid { grid-template-columns: 1fr; }
+      .loop-code pre { padding: 20px 14px 16px; font-size: 12px; }
+      .formal-model { padding: 18px 16px; }
+      .formal-row { grid-template-columns: 1fr; gap: 4px; }
+      .formal-code-map { font-size: 11px; }
+      .formal-terms { padding: 18px 16px; }
+      .state-api-figure,
+      .implementation-figure { padding: 14px; border-radius: 16px; }
+      .state-api-grid { margin-top: 13px; }
+      .implementation-fact { margin-left: 0; }
+      .snapshot-banner,
+      .writeback-entry { display: block; }
+      .snapshot-banner code,
+      .writeback-entry span { display: block; margin-top: 7px; }
+      .observation-separation { grid-template-columns: 1fr; }
+      .request-anatomy { grid-template-columns: 1fr; }
+      .source-flow { grid-template-columns: 1fr; }
+      .source-step::after { display: none !important; }
+      .figure { padding: 5px; border-radius: 14px; overflow-x: auto; }
+      .figure img, .figure svg { width: 760px; max-width: none; }
+      .figure.wide img, .figure.wide svg { width: 980px; }
+      .source-list li { display: block; }
+      .source-list span { display: block; margin-top: 7px; }
+      .state-ops-grid,
+      .runtime-definitions,
+      .scenario-strip,
+      .skill-contrast,
+      .hook-boundaries,
+      .policy-state { grid-template-columns: 1fr; }
+      .projection-bar { grid-template-columns: 1fr; gap: 7px; }
+      .feature-figure { padding: 4px; overflow-x: auto; }
+      .feature-figure img { width: 980px; max-width: none; }
+      .feature-figure.subagent img { width: 100%; max-width: 100%; }
+      .feature-mapping { font-size: 12px; }
+      .feature-mapping th,
+      .feature-mapping td { padding: 10px 9px; }
+      pre { font-size: 12px; }
+    }
+    @media print {
+      body { background: #fff; }
+      .progress, .toc { display: none; }
+      .page { display: block; width: 100%; padding: 0; }
+      .hero, .chapter, .end-note { box-shadow: none; break-inside: avoid; }
+      .chapter { border-color: #bbb; }
+    }
+  </style>
+</head>
+<body>
+  <div class="progress" aria-hidden="true"><span id="progressBar"></span></div>
+  <header class="hero" id="top">
+    <p class="hero-positioning">系统性认识 Code Agent</p>
+    <h1>Agent 如何工作</h1>
+    <p class="lede">基于 Codex 的实现分析</p>
+    <p class="thesis">Agent Loop 就像人做事：先了解当前工作环境，采取一步行动，观察环境发生了什么变化，再据此决定下一步，如此反复直到任务完成。</p>
+  </header>
+  <div class="page">
+    <nav class="toc" aria-label="报告目录">
+      <div class="toc-mark">Tutorial 01</div>
+      <a href="#minimal-loop"><span>01</span><span>最小可执行循环</span></a>
+      <a href="#formal-loop"><span>02</span><span>World–LLM 形式化</span></a>
+      <a href="#three-objects"><span>03</span><span>两个状态接口</span></a>
+      <a href="#projection-loop"><span>04</span><span>Codex 构造 LLM Input</span></a>
+      <a href="#prompt-anatomy"><span>05</span><span>Codex 写回 Observation</span></a>
+      <a href="#state-timeline"><span>06</span><span>State Scope 演化</span></a>
+      <a href="#state-operations"><span>07</span><span>五种 State 操作</span></a>
+      <a href="#mcp-extension"><span>08</span><span>MCP 接入远程 World</span></a>
+      <a href="#subagent-extension"><span>09</span><span>Subagent 状态图</span></a>
+      <a href="#loop-engineering"><span>10</span><span>Harness、Hooks 与 Policy</span></a>
+      <a href="#unified-loop"><span>11</span><span>回到完整伪代码</span></a>
+    </nav>
+
+    <main class="report">
+      <section class="chapter" id="minimal-loop">
+        <div class="chapter-head">
+          <div class="chapter-no">01</div>
+          <h2>Agent Loop 的最小可执行骨架</h2>
+        </div>
+        <p class="chapter-intro">ReAct 给出“想一步、做一步、看结果”的节奏；Agent runtime 把它实现为多次模型调用和真实环境交互。</p>
+
+        <div class="minimal-loop-grid">
+          <div class="loop-code" aria-label="最小 Agent Loop 伪代码">
+            <div class="loop-code-head"><span>MINIMAL AGENT LOOP</span><span>PSEUDOCODE</span></div>
+            <pre><span class="code-state">state</span> ← initialize(user_request)
+<span class="code-kw">while</span> true:
+    view ← build_context(state)
+    <span class="code-cm"># Reason</span>
+    <span class="code-llm">decision ← LLM(view, tools)</span>
+    <span class="code-kw">if</span> decision is Final:
+        <span class="code-kw">return</span> decision.answer
+    <span class="code-cm"># Action proposal</span>
+    action ← decision.tool_call
+    <span class="code-runtime">observation ← Runtime.execute(action)</span>
+    <span class="code-state">state ← update(</span>
+        <span class="code-state">state, action, observation</span>
+    <span class="code-state">)</span></pre>
+            <p class="loop-gloss"><code>state</code> 是 runtime 当前记录的任务状态；<code>view</code> 是这次模型调用看到的内容；<code>observation</code> 是执行动作后捕获的结果。</p>
+          </div>
+
+          <figure class="react-figure">
+            <svg id="react1-root" xmlns="http://www.w3.org/2000/svg" width="720" height="660" viewBox="0 0 720 660" role="img" aria-labelledby="react1-title react1-desc">
+              <title id="react1-title">Minimal executable ReAct agent loop</title>
+              <desc id="react1-desc">The model reasons over the current view and proposes an action. The runtime validates and executes that proposal in the world. A bounded observation updates state and triggers the next model call.</desc>
+              <defs>
+                <marker id="react1-arrow-orange" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,5 L0,10 Z" fill="#ad4d23"/></marker>
+                <marker id="react1-arrow-teal" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M0,0 L10,5 L0,10 Z" fill="#0f766e"/></marker>
+                <style>
+                  #react1-root .sans { font-family: Inter, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; }
+                  #react1-root .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; }
+                  #react1-root .eyebrow { font-size: 15px; font-weight: 800; letter-spacing: 1.6px; }
+                  #react1-root .badge { font-size: 13px; font-weight: 800; letter-spacing: 1.1px; }
+                  #react1-root .title { font-size: 27px; font-weight: 760; }
+                  #react1-root .body { font-size: 16px; font-weight: 520; }
+                  #react1-root .edge { font-size: 13px; font-weight: 750; letter-spacing: .7px; }
+                </style>
+              </defs>
+              <rect width="720" height="660" rx="24" fill="#f7f6f2"/>
+              <text class="sans eyebrow" x="36" y="40" fill="#607184">REACT × EXECUTION BOUNDARY</text>
+
+              <g>
+                <rect x="118" y="72" width="484" height="142" rx="24" fill="#edf3fb" stroke="#7f9fc5" stroke-width="2"/>
+                <rect x="144" y="96" width="94" height="28" rx="14" fill="#315f94"/>
+                <text class="sans badge" x="191" y="115" text-anchor="middle" fill="#ffffff">REASON</text>
+                <text class="sans title" x="144" y="160" fill="#17283d">LLM 决定下一步</text>
+                <text class="sans body" x="144" y="190" fill="#52677e">基于当前 view 生成 final 或 tool call</text>
+              </g>
+
+              <line x1="360" y1="214" x2="360" y2="278" stroke="#ad4d23" stroke-width="4" marker-end="url(#react1-arrow-orange)"/>
+              <rect x="390" y="229" width="184" height="34" rx="17" fill="#fff1e7"/>
+              <text class="sans edge" x="482" y="251" text-anchor="middle" fill="#9d461f">ACTION PROPOSAL</text>
+
+              <g>
+                <rect x="118" y="290" width="484" height="136" rx="24" fill="#fff3e9" stroke="#d77749" stroke-width="2"/>
+                <rect x="144" y="314" width="100" height="28" rx="14" fill="#ad4d23"/>
+                <text class="sans badge" x="194" y="333" text-anchor="middle" fill="#ffffff">RUNTIME</text>
+                <text class="sans title" x="144" y="378" fill="#17283d">校验、路由并执行 action</text>
+                <text class="sans body" x="144" y="407" fill="#765447">proposal 到这里才可能成为真实行为</text>
+              </g>
+
+              <line x1="360" y1="426" x2="360" y2="478" stroke="#ad4d23" stroke-width="4" marker-end="url(#react1-arrow-orange)"/>
+              <text class="sans edge" x="382" y="460" fill="#9d461f">EXECUTE</text>
+
+              <g>
+                <rect x="118" y="490" width="484" height="108" rx="24" fill="#17283d"/>
+                <text class="sans title" x="144" y="536" fill="#ffffff">World</text>
+                <text class="sans body" x="144" y="568" fill="#c9d6e4">文件 · 进程 · 测试 · 网络与其他工具</text>
+              </g>
+
+              <path d="M602 544 C688 544, 686 142, 614 142" fill="none" stroke="#0f766e" stroke-width="4" marker-end="url(#react1-arrow-teal)"/>
+              <rect x="605" y="292" width="104" height="76" rx="18" fill="#e6f4f0" stroke="#91c4bb"/>
+              <text class="sans badge" x="657" y="319" text-anchor="middle" fill="#0f766e">OBSERVE</text>
+              <text class="sans body" x="657" y="345" text-anchor="middle" fill="#466b67">有限结果</text>
+              <text class="sans edge" x="657" y="392" text-anchor="middle" fill="#0f766e">UPDATE STATE</text>
+              <text class="sans edge" x="657" y="413" text-anchor="middle" fill="#0f766e">NEXT CALL</text>
+
+              <rect x="190" y="617" width="340" height="30" rx="15" fill="#fff1e7"/>
+              <text class="sans edge" x="360" y="637" text-anchor="middle" fill="#9d461f">ACTION = PROPOSAL + EXECUTION</text>
+            </svg>
+            <figcaption><strong>ReAct 对应：</strong>Reason 是模型决策；Action 横跨 proposal 与真实执行；Observation 是 runtime 捕获的有限结果。</figcaption>
+          </figure>
+        </div>
+
+        <div class="loop-claim"><strong>模型负责提出下一步；</strong>runtime 负责让动作发生、捕获结果，并带着新状态再次调用模型。</div>
+      </section>
+
+      <section class="chapter" id="formal-loop">
+        <div class="chapter-head">
+          <div class="chapter-no">02</div>
+          <h2>把 Agent Loop 写成状态转移</h2>
+        </div>
+        <p class="chapter-intro">LLM 不直接读取或修改工作世界；它读取 runtime 构造的 view，产生 proposal，世界转移由 runtime 执行。最小伪代码中的每一行，都对应一个明确的状态转移算子。</p>
+
+        <div class="formal-grid">
+          <div class="formal-model" aria-label="World 与 LLM 交互的形式化表达">
+            <div class="formal-label">FORMAL STEP · RESEARCH ABSTRACTION</div>
+            <div class="formal-transition">
+              <span>(W<sub>t</sub>, S<sub>t</sub>)</span>
+              <span class="arrow">→</span>
+              <span>(W<sub>t+1</sub>, S<sub>t+1</sub>)</span>
+            </div>
+
+            <div class="formal-rows">
+              <div class="formal-row">
+                <div class="formal-equation teal">P<sub>t</sub> = π<sub>t</sub>(S<sub>t</sub>)</div>
+                <div class="formal-code-map">view ← build_context(state)</div>
+              </div>
+              <div class="formal-row">
+                <div class="formal-equation blue">q<sub>t</sub> = M(P<sub>t</sub>)</div>
+                <div class="formal-code-map">decision ← LLM(view, tools)</div>
+              </div>
+              <div class="formal-row">
+                <div class="formal-equation">
+                  <span class="equation-line">q<sub>t</sub> = Final(y<sub>t</sub>)</span>
+                  <span class="equation-line">or q<sub>t</sub> = Act(a<sub>t</sub>)</span>
+                </div>
+                <div class="formal-code-map">if Final: return; else: tool_call</div>
+              </div>
+              <div class="formal-row">
+                <div class="formal-equation orange">
+                  <span class="equation-line">(W<sub>t+1</sub>, o<sub>t</sub>) =</span>
+                  <span class="equation-line">Execute<sub>Γₜ</sub>(W<sub>t</sub>, a<sub>t</sub>)</span>
+                </div>
+                <div class="formal-code-map">observation ← Runtime.execute(action)</div>
+              </div>
+              <div class="formal-row">
+                <div class="formal-equation teal">S<sub>t+1</sub> = Reduce(S<sub>t</sub>, q<sub>t</sub>, o<sub>t</sub>)</div>
+                <div class="formal-code-map">state ← update(state, action, observation)</div>
+              </div>
+            </div>
+          </div>
+
+          <aside class="formal-terms" aria-label="形式化符号定义">
+            <h3>SYSTEM OBJECTS · t = MODEL STEP</h3>
+            <dl class="term-list">
+              <div class="term-item">
+                <dt>W<sub>t</sub></dt>
+                <dd>真实工作世界：文件、进程、测试、网络服务与其他参与者。</dd>
+              </div>
+              <div class="term-item">
+                <dt>S<sub>t</sub></dt>
+                <dd>runtime state：目标、历史、证据、权限、计划和控制信息。</dd>
+              </div>
+              <div class="term-item">
+                <dt>P<sub>t</sub></dt>
+                <dd>model-visible view：instructions、input、tools 与输出约束。</dd>
+              </div>
+              <div class="term-item">
+                <dt>q<sub>t</sub></dt>
+                <dd>模型 proposal：最终答案 y<sub>t</sub> 或候选 action a<sub>t</sub>。</dd>
+              </div>
+              <div class="term-item">
+                <dt>o<sub>t</sub></dt>
+                <dd>有限 observation：stdout、退出码、diff、错误或工具结果。</dd>
+              </div>
+            </dl>
+
+            <h3>SYSTEM OPERATORS</h3>
+            <div class="operator-grid">
+              <div class="operator-item"><b>π<sub>t</sub></b>构造本次 view</div>
+              <div class="operator-item"><b>M</b>一次 LLM 调用</div>
+              <div class="operator-item"><b>Execute<sub>Γ</sub></b>受控执行 action</div>
+              <div class="operator-item"><b>Reduce</b>写回下一步 state</div>
+            </div>
+          </aside>
+        </div>
+
+        <div class="formal-claim"><strong>只有 M 是 LLM 调用；</strong>π<sub>t</sub>、Execute<sub>Γ</sub>、Reduce 和循环控制都是 runtime 程序。</div>
+      </section>
+
+      <section class="chapter" id="three-objects">
+        <div class="chapter-head">
+          <div class="chapter-no">03</div>
+          <h2>Agent Loop 的两个状态接口</h2>
+        </div>
+        <p class="chapter-intro">每轮交互对 state 只做两件核心事情：调用前读出一个有限视图，调用后把模型输出与新的世界证据写回。</p>
+
+        <!-- FIG-03 · STATE READ / STATE WRITE
+             S_t -> project_state -> P_t -> LLM -> q_t -> runtime/world -> o_t
+             o_t -> update_state(S_t,q_t,o_t) -> S_t+1 -->
+        <figure class="state-api-figure" id="fig-state-interfaces" aria-labelledby="fig-state-interfaces-caption">
+          <div class="diagram-kicker">FIGURE 03 · STATE READ / STATE WRITE</div>
+          <div class="state-api-grid">
+            <div class="state-snapshot state-before">
+              <span class="diagram-label">COMPLEX AGENT STATE</span>
+              <h3>S<sub>t</sub></h3>
+              <div class="state-chip-row">
+                <span>goal</span><span>history</span><span>evidence</span>
+                <span>permissions</span><span>budgets</span><span>control</span>
+              </div>
+            </div>
+
+            <div class="state-api-link read-link">
+              <div>
+                <span>API 1 · STATE READ</span>
+                <code>project_state(S<sub>t</sub>) → P<sub>t</sub></code>
+              </div>
+              <div class="api-arrow" aria-hidden="true">→</div>
+            </div>
+
+            <div class="model-input-card">
+              <span class="diagram-label">LLM CALL INPUT · P<sub>t</sub></span>
+              <h3>模型本次真正看到的内容</h3>
+              <div class="input-chip-row">
+                <span>instructions</span><span>input[]</span>
+                <span>tools</span><span>output_schema</span>
+              </div>
+            </div>
+
+            <div class="runtime-bridge" aria-label="模型产生 proposal，runtime 在工作世界中执行并产生 observation">
+              <b>LLM</b><i>→</i><span>proposal q<sub>t</sub></span><i>→</i>
+              <b class="world-pill">runtime × world</b>
+            </div>
+
+            <div class="observation-card">
+              <span class="diagram-label">WORLD OBSERVATION · o<sub>t</sub></span>
+              <h3>一次有限的世界证据</h3>
+              <p>stdout、退出码、diff、错误或工具返回值；它不是完整世界，只是这次交互捕获到的 observation。</p>
+            </div>
+
+            <div class="state-api-link write-link">
+              <div class="api-arrow" aria-hidden="true">←</div>
+              <div>
+                <span>API 2 · STATE WRITE</span>
+                <code>update_state(S<sub>t</sub>, q<sub>t</sub>, o<sub>t</sub>)</code>
+              </div>
+            </div>
+
+            <div class="state-snapshot state-after">
+              <span class="diagram-label">NEXT AGENT STATE</span>
+              <h3>S<sub>t+1</sub></h3>
+              <div class="state-chip-row">
+                <span>proposal q<sub>t</sub></span><span>observation o<sub>t</sub></span>
+                <span>updated control</span>
+              </div>
+            </div>
+          </div>
+          <figcaption id="fig-state-interfaces-caption"><strong>Figure 3.</strong> 两个 API 都由 runtime 实现。LLM 只位于中间，把一次有界输入 <span class="mono">P<sub>t</sub></span> 映射为 proposal <span class="mono">q<sub>t</sub></span>。</figcaption>
+        </figure>
+
+        <div class="api-contracts">
+          <article class="api-contract">
+            <h3>project_state : S<sub>t</sub> → P<sub>t</sub></h3>
+            <p>选择、规范化并限制一次调用可见的 state。完整 state 中的控制信息、原始证据和外部世界不会自动全部进入 prompt。</p>
+          </article>
+          <article class="api-contract">
+            <h3>update_state : (S<sub>t</sub>, q<sub>t</sub>, o<sub>t</sub>) → S<sub>t+1</sub></h3>
+            <p>把 proposal 与对应 observation 一起写回，保留 call/output 关系与 provenance；它不是对一段 stdout 的盲目 append。</p>
+          </article>
+        </div>
+
+        <div class="state-interface-claim"><strong>Agent 的核心不是不断给 LLM 追加聊天记录，</strong>而是在反复执行一次 state read 和一次 evidence write。</div>
+      </section>
+
+      <section class="chapter" id="projection-loop">
+        <div class="chapter-head">
+          <div class="chapter-no">04</div>
+          <h2>Codex 如何构造一次 LLM Call Input</h2>
+        </div>
+        <p class="chapter-intro">Codex 中没有一个单独的 <code>project_state()</code>。这个抽象由 request snapshot、context materialization、history normalization 与 prompt assembly 共同实现。</p>
+
+        <div class="implementation-fact"><strong>关键一致性边界：</strong>每个 model step 只捕获一次 <code>StepContext</code>，使注入的 context、向模型公开的工具，以及随后执行工具时使用的环境来自同一个 request-scoped view。</div>
+
+        <!-- FIG-04 · CODEX PROJECTION PIPELINE
+             capture request state -> materialize context diffs
+             -> project input[] and tools[] -> build Prompt -->
+        <figure class="implementation-figure" id="fig-codex-projection" aria-labelledby="fig-codex-projection-caption">
+          <div class="diagram-kicker">FIGURE 04 · CODEX PROJECTION PIPELINE</div>
+          <div class="snapshot-banner">
+            <span>一次 model step 的一致性快照</span>
+            <code>context · advertised tools · later tool calls</code>
+          </div>
+          <div class="implementation-flow">
+            <article class="implementation-step">
+              <span class="step-no">01 · CAPTURE</span>
+              <h3>冻结动态 step state</h3>
+              <code>capture_step_context()</code>
+              <p>捕获 environments、已加载的 AGENTS、capability roots 与 MCP runtime。</p>
+            </article>
+
+            <article class="implementation-step">
+              <span class="step-no">02 · MATERIALIZE</span>
+              <h3>把环境变化写进 history</h3>
+              <code>record_context_updates...()</code>
+              <p>首次注入完整 context；后续根据 reference snapshot 生成 settings 与 typed world-state diff。</p>
+            </article>
+
+            <article class="implementation-step">
+              <span class="step-no">03 · PROJECT</span>
+              <h3>生成两条模型可见支路</h3>
+              <div class="projection-branches">
+                <div class="projection-branch"><b>clone_history().for_prompt()</b>normalize → <code>input[]</code></div>
+                <div class="projection-branch"><b>built_tools()</b>model-visible specs → <code>tools[]</code></div>
+              </div>
+            </article>
+
+            <article class="implementation-step assemble-step">
+              <span class="step-no">04 · ASSEMBLE</span>
+              <h3>组装并发送 Prompt</h3>
+              <code>build_prompt() → stream()</code>
+              <p><code>input[]</code>、<code>tools[]</code>、base instructions 与 output schema 汇入一次模型请求。</p>
+            </article>
+          </div>
+          <figcaption id="fig-codex-projection-caption"><strong>Figure 4.</strong> 抽象 API <code>project_state</code> 在 Codex 中是一条分布式 pipeline，而不是一次字符串拼接。</figcaption>
+        </figure>
+
+        <div class="source-evidence-grid">
+          <div class="source-block">
+            <div class="source-head"><span>session/turn.rs · request input</span><span>abridged source path</span></div>
+            <pre><span class="cm">// Capture once so context, advertised tools,</span>
+<span class="cm">// and tool calls share one request view.</span>
+<span class="kw">let</span> step_context = sess.<span class="fn">capture_step_context</span>(...).await;
+
+<span class="kw">let</span> input = sess.<span class="fn">clone_history</span>().await
+    .<span class="fn">for_prompt</span>(&amp;model.input_modalities);</pre>
+          </div>
+
+          <div class="source-block">
+            <div class="source-head"><span>session/turn.rs · build_prompt</span><span>abridged source</span></div>
+            <pre>Prompt {
+    input,
+    tools: router.<span class="fn">model_visible_specs</span>(),
+    parallel_tool_calls: model.supports_parallel_tool_calls,
+    base_instructions,
+    output_schema,
+}</pre>
+          </div>
+        </div>
+
+        <div class="projection-insight"><strong><code>input[]</code> 不是完整 state，也不是 LLM 在一次调用里持续 append 的数组。</strong>它是 runtime 从当前 <code>ContextManager</code> 取得并规范化的 snapshot；工具定义则由同一个 <code>StepContext</code> 单独投影后再与之汇合。</div>
+
+        <p class="implementation-boundary"><strong>命名边界：</strong>Codex 源码中的 <code>WorldState</code> 管理 environment、AGENTS、apps、plugins 等模型可见环境片段的 typed snapshot/diff。它只是本文 <span class="mono">S<sub>t</sub></span> 中为 projection 服务的一部分，不是完整外部工作世界 <span class="mono">W<sub>t</sub></span>。</p>
+      </section>
+
+      <section class="chapter" id="prompt-anatomy">
+        <div class="chapter-head">
+          <div class="chapter-no">05</div>
+          <h2>Codex 如何把 World Observation 写回 State</h2>
+        </div>
+        <p class="chapter-intro">一次工具交互不是“执行完成后 append 一段输出”。Codex 先记录模型提出的 tool call，再执行工具，最后把处理后的 observation 作为第二条记录写入 model-visible state。</p>
+
+        <!-- FIG-05 · CODEX OBSERVATION WRITE-BACK
+             OutputItemDone(q_t) -> write proposal -> execute in world
+             -> shape observation -> write output -> S_t+1 -> follow-up -->
+        <figure class="implementation-figure" id="fig-codex-writeback" aria-labelledby="fig-codex-writeback-caption">
+          <div class="diagram-kicker">FIGURE 05 · CODEX OBSERVATION WRITE-BACK</div>
+          <div class="writeback-entry">
+            <code>ResponseEvent::OutputItemDone(q<sub>t</sub>)</code>
+            <span>模型 stream 产出一个完整 response item</span>
+          </div>
+
+          <div class="writeback-track">
+            <article class="writeback-step write-step">
+              <span class="write-tag">WRITE 1 · PROPOSAL</span>
+              <h3>先记录 tool call</h3>
+              <code>record proposal</code>
+              <p>proposal 先进入 history 与 rollout；即使执行随后取消或失败，调用意图仍然可追踪。</p>
+            </article>
+
+            <article class="writeback-step">
+              <span class="phase-tag">ROUTE</span>
+              <h3>解析并调度调用</h3>
+              <code>parse → schedule</code>
+              <p>响应 item 被解析为带 <code>call_id</code> 的 ToolCall，并按并发、取消与 step context 规则调度。</p>
+            </article>
+
+            <article class="writeback-step world-step">
+              <span class="phase-tag">WORLD INTERACTION</span>
+              <h3>执行并产生结果</h3>
+              <code>Router → Registry → Handler</code>
+              <p>权限、hooks 与具体 handler 共同产生真实 world effect 和 raw tool result。</p>
+            </article>
+
+            <article class="writeback-step write-step">
+              <span class="write-tag">WRITE 2 · OBSERVATION</span>
+              <h3>转换后写回 output</h3>
+              <code>shape → record output</code>
+              <p>结果被转成 ResponseInputItem，经过反馈替换与输出截断，再由 <code>record_conversation_items()</code> 写入。</p>
+            </article>
+
+            <article class="writeback-step next-state-step">
+              <span class="phase-tag">NEXT STATE</span>
+              <h3>S<sub>t+1</sub> 可供下一次投影</h3>
+              <code>follow-up → reproject</code>
+              <p>下一轮重新运行 <code>clone_history().for_prompt()</code>，模型才真正看到这次 observation。</p>
+            </article>
+          </div>
+
+          <div class="observation-separation" aria-label="世界效果、原始结果、存储的 observation 与下一次 prompt 表示互不等同">
+            <span>world effect</span>
+            <span>raw tool result</span>
+            <span>stored observation</span>
+            <span>next prompt view</span>
+          </div>
+          <figcaption id="fig-codex-writeback-caption"><strong>Figure 5.</strong> Codex 的 <code>update_state</code> 同样不是一个单体函数；它分布在 response-item 记录、工具执行、结果转换、截断与 history 写入之间。</figcaption>
+        </figure>
+
+        <div class="source-evidence-grid">
+          <div class="source-block">
+            <div class="source-head"><span>stream_events_utils.rs · write proposal</span><span>abridged source</span></div>
+            <pre><span class="fn">record_completed_response_item</span>(..., &amp;item).await;
+
+<span class="kw">let</span> tool_future = ctx.tool_runtime
+    .<span class="fn">handle_tool_call</span>(call, cancellation_token);
+
+output.needs_follow_up = <span class="kw">true</span>;</pre>
+          </div>
+
+          <div class="source-block">
+            <div class="source-head"><span>session/turn.rs · write observation</span><span>source</span></div>
+            <pre><span class="kw">let</span> response_item = response_input.into();
+sess.<span class="fn">record_conversation_items</span>(
+    &amp;turn_context,
+    std::slice::from_ref(&amp;response_item),
+).await;</pre>
+          </div>
+        </div>
+
+        <div class="warning"><strong>PostToolUse 的精确语义：</strong>工具已经完成后，hook 可以拒绝或替换“给模型看的结果”，但不能撤销已经发生的文件或进程副作用。因此 world effect、raw result 与 model-visible observation 必须分开建模。</div>
+
+        <div class="writeback-insight"><strong>只有被转换并记录的 observation 才会进入下一次 projection。</strong>Codex 在写入 function output 时应用 truncation policy；下一次 <code>for_prompt()</code> 还会检查 call/output 配对并移除 orphan output。</div>
+      </section>
+
+      <section class="chapter" id="state-timeline">
+        <div class="chapter-head">
+          <div class="chapter-no">06</div>
+          <h2>Feature 的演化，是 State Scope 的扩张</h2>
+        </div>
+        <p class="chapter-intro">从 ReAct 到 MCP、Skill、Subagent 与 Hooks，变化的重点并不是 LLM call 本身，而是 runtime 开始维护更丰富的 World interface、procedure、trajectory 和 lifecycle。</p>
+
+        <figure class="feature-figure">
+          <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxNDQwIiBoZWlnaHQ9IjcyMCIgdmlld0JveD0iMCAwIDE0NDAgNzIwIiByb2xlPSJpbWciIGFyaWEtbGFiZWxsZWRieT0idGl0bGUgZGVzYyI+CiAgPHRpdGxlIGlkPSJ0aXRsZSI+QWdlbnQgZmVhdHVyZSB0aW1lbGluZSBhcyBleHBhbmRpbmcgc3RhdGUgc2NvcGU8L3RpdGxlPgogIDxkZXNjIGlkPSJkZXNjIj5SZXByZXNlbnRhdGl2ZSBtaWxlc3RvbmVzIGZyb20gUmVBY3QgdGhyb3VnaCBoYXJuZXNzIGVuZ2luZWVyaW5nLiBFYWNoIG1pbGVzdG9uZSBhZGRzIGEgc3RhdGUtbWFuYWdlbWVudCByZXNwb25zaWJpbGl0eSB3aGlsZSB0aGUgcHJvbXB0IHJlbWFpbnMgYSB0YXNrLXNwZWNpZmljIHByb2plY3Rpb24uPC9kZXNjPgogIDxkZWZzPgogICAgPG1hcmtlciBpZD0iYXJyb3ciIG1hcmtlcldpZHRoPSIxMCIgbWFya2VySGVpZ2h0PSIxMCIgcmVmWD0iOCIgcmVmWT0iNSIgb3JpZW50PSJhdXRvIj48cGF0aCBkPSJNMCAwTDEwIDVMMCAxMFoiIGZpbGw9IiM2MDcxODQiLz48L21hcmtlcj4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0ic2NvcGUiIHgxPSIwIiB4Mj0iMSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjZWFmMWZiIi8+PHN0b3Agb2Zmc2V0PSIuNTUiIHN0b3AtY29sb3I9IiNlNmY0ZjAiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiNmZmYxZTciLz48L2xpbmVhckdyYWRpZW50PgogICAgPHN0eWxlPgogICAgICAuc2Fuc3tmb250LWZhbWlseTpJbnRlciwiTm90byBTYW5zIENKSyBTQyIsIk1pY3Jvc29mdCBZYUhlaSIsc2Fucy1zZXJpZn0KICAgICAgLm1vbm97Zm9udC1mYW1pbHk6IlNGTW9uby1SZWd1bGFyIixDb25zb2xhcywiTGliZXJhdGlvbiBNb25vIixtb25vc3BhY2V9CiAgICAgIC5leWVicm93e2ZvbnQtc2l6ZToxNnB4O2ZvbnQtd2VpZ2h0OjgwMDtsZXR0ZXItc3BhY2luZzoycHh9CiAgICAgIC5oZWFkbGluZXtmb250LXNpemU6MzBweDtmb250LXdlaWdodDo3ODB9CiAgICAgIC5kYXRle2ZvbnQtc2l6ZToxNHB4O2ZvbnQtd2VpZ2h0OjgwMDtsZXR0ZXItc3BhY2luZzoxcHh9CiAgICAgIC50aXRsZXtmb250LXNpemU6MjBweDtmb250LXdlaWdodDo3ODB9CiAgICAgIC5ib2R5e2ZvbnQtc2l6ZToxNHB4O2ZvbnQtd2VpZ2h0OjU0MH0KICAgICAgLnNtYWxse2ZvbnQtc2l6ZToxM3B4O2ZvbnQtd2VpZ2h0OjY1MH0KICAgICAgLmJhbmR7Zm9udC1zaXplOjE3cHg7Zm9udC13ZWlnaHQ6NzYwfQogICAgPC9zdHlsZT4KICA8L2RlZnM+CiAgPHJlY3Qgd2lkdGg9IjE0NDAiIGhlaWdodD0iNzIwIiByeD0iMjgiIGZpbGw9IiNmN2Y2ZjIiLz4KICA8dGV4dCBjbGFzcz0ic2FucyBleWVicm93IiB4PSI2NCIgeT0iNTIiIGZpbGw9IiMwZjc2NmUiPkZJR1VSRSAwNiDCtyBTVEFURSBTQ09QRSBFWFBBTlNJT048L3RleHQ+CiAgPHRleHQgY2xhc3M9InNhbnMgaGVhZGxpbmUiIHg9IjY0IiB5PSI5NiIgZmlsbD0iIzE3MjgzZCI+RmVhdHVyZSDnmoTmvJTljJbvvIzmmK8gUnVudGltZSDkuI3mlq3mib/mi4XmlrDnmoQgU3RhdGUg566h55CG6LSj5Lu7PC90ZXh0PgogIDx0ZXh0IGNsYXNzPSJzYW5zIHNtYWxsIiB4PSI2NCIgeT0iMTI2IiBmaWxsPSIjNjA3MTg0Ij7ku6PooajmgKflhazlvIDoioLngrnvvIzkuI3ooajnpLrmpoLlv7XlnKjov5nkuIDlubTmiY3pppbmrKHlh7rnjrA8L3RleHQ+CgogIDxsaW5lIHgxPSI4OCIgeTE9IjE4MCIgeDI9IjEzNTAiIHkyPSIxODAiIHN0cm9rZT0iIzlhYWJiOSIgc3Ryb2tlLXdpZHRoPSIzIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93KSIvPgoKICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg2NCAxNTQpIj4KICAgIDxjaXJjbGUgY3g9IjU0IiBjeT0iMjYiIHI9IjkiIGZpbGw9IiMzMTVmOTQiLz4KICAgIDxyZWN0IHg9IjAiIHk9IjU0IiB3aWR0aD0iMTg4IiBoZWlnaHQ9IjIwMiIgcng9IjE4IiBmaWxsPSIjZmZmIiBzdHJva2U9IiNiN2NiZTQiLz4KICAgIDx0ZXh0IGNsYXNzPSJtb25vIGRhdGUiIHg9IjE4IiB5PSI4MiIgZmlsbD0iIzMxNWY5NCI+MjAyMiDCtyBSRUFDVDwvdGV4dD4KICAgIDx0ZXh0IGNsYXNzPSJzYW5zIHRpdGxlIiB4PSIxOCIgeT0iMTE4IiBmaWxsPSIjMTcyODNkIj7lvqrnjq/miJDkuLrlr7nosaE8L3RleHQ+CiAgICA8dGV4dCBjbGFzcz0ic2FucyBib2R5IiB4PSIxOCIgeT0iMTUwIiBmaWxsPSIjNjA3MTg0Ij5yZWFzb24gLyBhY3Rpb24gLzwvdGV4dD4KICAgIDx0ZXh0IGNsYXNzPSJzYW5zIGJvZHkiIHg9IjE4IiB5PSIxNzQiIGZpbGw9IiM2MDcxODQiPm9ic2VydmF0aW9uIOS6pOabvzwvdGV4dD4KICAgIDxyZWN0IHg9IjE4IiB5PSIxOTgiIHdpZHRoPSIxNTIiIGhlaWdodD0iMzYiIHJ4PSIxMCIgZmlsbD0iI2VhZjFmYiIvPgogICAgPHRleHQgY2xhc3M9Im1vbm8gc21hbGwiIHg9Ijk0IiB5PSIyMjEiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiMzMTVmOTQiPmxpbmVhciB0cmFjZTwvdGV4dD4KICA8L2c+CgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDI4MCAxNTQpIj4KICAgIDxjaXJjbGUgY3g9IjU0IiBjeT0iMjYiIHI9IjkiIGZpbGw9IiMzMTVmOTQiLz4KICAgIDxyZWN0IHg9IjAiIHk9IjU0IiB3aWR0aD0iMTg4IiBoZWlnaHQ9IjIwMiIgcng9IjE4IiBmaWxsPSIjZmZmIiBzdHJva2U9IiNiN2NiZTQiLz4KICAgIDx0ZXh0IGNsYXNzPSJtb25vIGRhdGUiIHg9IjE4IiB5PSI4MiIgZmlsbD0iIzMxNWY5NCI+MjAyMyDCtyBUT09MUzwvdGV4dD4KICAgIDx0ZXh0IGNsYXNzPSJzYW5zIHRpdGxlIiB4PSIxOCIgeT0iMTE4IiBmaWxsPSIjMTcyODNkIj7kuqTkupLnu5PmnoTljJY8L3RleHQ+CiAgICA8dGV4dCBjbGFzcz0ic2FucyBib2R5IiB4PSIxOCIgeT0iMTUwIiBmaWxsPSIjNjA3MTg0Ij50b29sIG5hbWUgLyBhcmdzIC88L3RleHQ+CiAgICA8dGV4dCBjbGFzcz0ic2FucyBib2R5IiB4PSIxOCIgeT0iMTc0IiBmaWxsPSIjNjA3MTg0Ij5jYWxsIElEIC8gcmVzdWx0PC90ZXh0PgogICAgPHJlY3QgeD0iMTgiIHk9IjE5OCIgd2lkdGg9IjE1MiIgaGVpZ2h0PSIzNiIgcng9IjEwIiBmaWxsPSIjZWFmMWZiIi8+CiAgICA8dGV4dCBjbGFzcz0ibW9ubyBzbWFsbCIgeD0iOTQiIHk9IjIyMSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzMxNWY5NCI+dHlwZWQgYm91bmRhcnk8L3RleHQ+CiAgPC9nPgoKICA8ZyB0cmFuc2Zvcm09InRyYW5zbGF0ZSg0OTYgMTU0KSI+CiAgICA8Y2lyY2xlIGN4PSI1NCIgY3k9IjI2IiByPSI5IiBmaWxsPSIjMGY3NjZlIi8+CiAgICA8cmVjdCB4PSIwIiB5PSI1NCIgd2lkdGg9IjE4OCIgaGVpZ2h0PSIyMDIiIHJ4PSIxOCIgZmlsbD0iI2ZmZiIgc3Ryb2tlPSIjOWNjYmMzIi8+CiAgICA8dGV4dCBjbGFzcz0ibW9ubyBkYXRlIiB4PSIxOCIgeT0iODIiIGZpbGw9IiMwZjc2NmUiPjIwMjQgwrcgTUNQPC90ZXh0PgogICAgPHRleHQgY2xhc3M9InNhbnMgdGl0bGUiIHg9IjE4IiB5PSIxMTgiIGZpbGw9IiMxNzI4M2QiPuWklumDqOezu+e7n+WPr+WPkeeOsDwvdGV4dD4KICAgIDx0ZXh0IGNsYXNzPSJzYW5zIGJvZHkiIHg9IjE4IiB5PSIxNTAiIGZpbGw9IiM2MDcxODQiPnNlcnZlciAvIGNhcGFiaWxpdHkgLzwvdGV4dD4KICAgIDx0ZXh0IGNsYXNzPSJzYW5zIGJvZHkiIHg9IjE4IiB5PSIxNzQiIGZpbGw9IiM2MDcxODQiPnJlc291cmNlIC8gcHJvdmVuYW5jZTwvdGV4dD4KICAgIDxyZWN0IHg9IjE4IiB5PSIxOTgiIHdpZHRoPSIxNTIiIGhlaWdodD0iMzYiIHJ4PSIxMCIgZmlsbD0iI2U2ZjRmMCIvPgogICAgPHRleHQgY2xhc3M9Im1vbm8gc21hbGwiIHg9Ijk0IiB5PSIyMjEiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiMwZjc2NmUiPndvcmxkIGludGVyZmFjZTwvdGV4dD4KICA8L2c+CgogIDxnIHRyYW5zZm9ybT0idHJhbnNsYXRlKDcxMiAxNTQpIj4KICAgIDxjaXJjbGUgY3g9IjU0IiBjeT0iMjYiIHI9IjkiIGZpbGw9IiMwZjc2NmUiLz4KICAgIDxyZWN0IHg9IjAiIHk9IjU0IiB3aWR0aD0iMTg4IiBoZWlnaHQ9IjIwMiIgcng9IjE4IiBmaWxsPSIjZmZmIiBzdHJva2U9IiM5Y2NiYzMiLz4KICAgIDx0ZXh0IGNsYXNzPSJtb25vIGRhdGUiIHg9IjE4IiB5PSI4MiIgZmlsbD0iIzBmNzY2ZSI+MjAyNSDCtyBDT0RFIEFHRU5UPC90ZXh0PgogICAgPHRleHQgY2xhc3M9InNhbnMgdGl0bGUiIHg9IjE4IiB5PSIxMTgiIGZpbGw9IiMxNzI4M2QiPui/m+WFpeW8gOWPkeS4lueVjDwvdGV4dD4KICAgIDx0ZXh0IGNsYXNzPSJzYW5zIGJvZHkiIHg9IjE4IiB5PSIxNTAiIGZpbGw9IiM2MDcxODQiPnJlcG8gLyBwcm9jZXNzIC8gdGVzdCAvPC90ZXh0PgogICAgPHRleHQgY2xhc3M9InNhbnMgYm9keSIgeD0iMTgiIHk9IjE3NCIgZmlsbD0iIzYwNzE4NCI+cGVybWlzc2lvbiAvIGV2aWRlbmNlPC90ZXh0PgogICAgPHJlY3QgeD0iMTgiIHk9IjE5OCIgd2lkdGg9IjE1MiIgaGVpZ2h0PSIzNiIgcng9IjEwIiBmaWxsPSIjZTZmNGYwIi8+CiAgICA8dGV4dCBjbGFzcz0ibW9ubyBzbWFsbCIgeD0iOTQiIHk9IjIyMSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzBmNzY2ZSI+ZGV2ZWxvcGVyIHdvcmxkPC90ZXh0PgogIDwvZz4KCiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoOTI4IDE1NCkiPgogICAgPGNpcmNsZSBjeD0iNTQiIGN5PSIyNiIgcj0iOSIgZmlsbD0iI2FkNGQyMyIvPgogICAgPHJlY3QgeD0iMCIgeT0iNTQiIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAyIiByeD0iMTgiIGZpbGw9IiNmZmYiIHN0cm9rZT0iI2U3YjI4ZiIvPgogICAgPHRleHQgY2xhc3M9Im1vbm8gZGF0ZSIgeD0iMTgiIHk9IjgyIiBmaWxsPSIjYWQ0ZDIzIj4yMDI1IMK3IENPTVBPU0U8L3RleHQ+CiAgICA8dGV4dCBjbGFzcz0ic2FucyB0aXRsZSIgeD0iMTgiIHk9IjExOCIgZmlsbD0iIzE3MjgzZCI+56iL5bqP44CB5YiG5pSv5LiO55Sf5ZG95ZGo5pyfPC90ZXh0PgogICAgPHRleHQgY2xhc3M9InNhbnMgYm9keSIgeD0iMTgiIHk9IjE1MCIgZmlsbD0iIzYwNzE4NCI+c2tpbGxzIC8gc3ViYWdlbnRzIC88L3RleHQ+CiAgICA8dGV4dCBjbGFzcz0ic2FucyBib2R5IiB4PSIxOCIgeT0iMTc0IiBmaWxsPSIjNjA3MTg0Ij5ob29rcyAvIGNoZWNrcG9pbnRzPC90ZXh0PgogICAgPHJlY3QgeD0iMTgiIHk9IjE5OCIgd2lkdGg9IjE2NCIgaGVpZ2h0PSIzNiIgcng9IjEwIiBmaWxsPSIjZmZmMWU3Ii8+CiAgICA8dGV4dCBjbGFzcz0ibW9ubyBzbWFsbCIgeD0iMTAwIiB5PSIyMjEiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiNhZDRkMjMiPnN0YXRlIHRvcG9sb2d5PC90ZXh0PgogIDwvZz4KCiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMTE1NiAxNTQpIj4KICAgIDxjaXJjbGUgY3g9IjU0IiBjeT0iMjYiIHI9IjkiIGZpbGw9IiNhZDRkMjMiLz4KICAgIDxyZWN0IHg9IjAiIHk9IjU0IiB3aWR0aD0iMjEyIiBoZWlnaHQ9IjIwMiIgcng9IjE4IiBmaWxsPSIjMTcyODNkIiBzdHJva2U9IiMxNzI4M2QiLz4KICAgIDx0ZXh0IGNsYXNzPSJtb25vIGRhdGUiIHg9IjE4IiB5PSI4MiIgZmlsbD0iIzgwZTFkMSI+MjAyNiDCtyBFTkdJTkVFUjwvdGV4dD4KICAgIDx0ZXh0IGNsYXNzPSJzYW5zIHRpdGxlIiB4PSIxOCIgeT0iMTE4IiBmaWxsPSIjZmZmIj5IYXJuZXNzIC8gTG9vcDwvdGV4dD4KICAgIDx0ZXh0IGNsYXNzPSJzYW5zIGJvZHkiIHg9IjE4IiB5PSIxNTAiIGZpbGw9IiNjOWQ2ZTQiPmVudmlyb25tZW50IC8gZmVlZGJhY2sgLzwvdGV4dD4KICAgIDx0ZXh0IGNsYXNzPSJzYW5zIGJvZHkiIHg9IjE4IiB5PSIxNzQiIGZpbGw9IiNjOWQ2ZTQiPnByb2plY3Rpb24gLyBwb2xpY3k8L3RleHQ+CiAgICA8cmVjdCB4PSIxOCIgeT0iMTk4IiB3aWR0aD0iMTc2IiBoZWlnaHQ9IjM2IiByeD0iMTAiIGZpbGw9IiMyNjNiNTUiLz4KICAgIDx0ZXh0IGNsYXNzPSJtb25vIHNtYWxsIiB4PSIxMDYiIHk9IjIyMSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzgwZTFkMSI+cnVudGltZSBhcyBkZXNpZ248L3RleHQ+CiAgPC9nPgoKICA8cmVjdCB4PSI2NCIgeT0iNDY0IiB3aWR0aD0iMTMwNCIgaGVpZ2h0PSI4NiIgcng9IjIwIiBmaWxsPSJ1cmwoI3Njb3BlKSIgc3Ryb2tlPSIjY2JkNmRkIi8+CiAgPHRleHQgY2xhc3M9Im1vbm8gZGF0ZSIgeD0iODgiIHk9IjQ5NSIgZmlsbD0iIzYwNzE4NCI+U1RBVEUgU0NPUEU8L3RleHQ+CiAgPHRleHQgY2xhc3M9InNhbnMgYmFuZCIgeD0iODgiIHk9IjUyOCIgZmlsbD0iIzMxNWY5NCI+5bGA6YOo57q/5oCn6L2o6L+5PC90ZXh0PgogIDxsaW5lIHgxPSIyNTIiIHkxPSI1MjIiIHgyPSIxMTM4IiB5Mj0iNTIyIiBzdHJva2U9IiM2MDcxODQiIHN0cm9rZS13aWR0aD0iMyIgbWFya2VyLWVuZD0idXJsKCNhcnJvdykiLz4KICA8dGV4dCBjbGFzcz0ic2FucyBiYW5kIiB4PSIxMTYyIiB5PSI1MjgiIGZpbGw9IiNhZDRkMjMiPuWkjeadgiBXb3JsZCDnmoTov5DooYzml7booajnpLo8L3RleHQ+CgogIDxyZWN0IHg9IjY0IiB5PSI1NzQiIHdpZHRoPSIxMzA0IiBoZWlnaHQ9Ijg4IiByeD0iMjAiIGZpbGw9IiMxNzI4M2QiLz4KICA8dGV4dCBjbGFzcz0ibW9ubyBkYXRlIiB4PSI4OCIgeT0iNjA3IiBmaWxsPSIjODBlMWQxIj5QUk9NUFQ8L3RleHQ+CiAgPHRleHQgY2xhc3M9InNhbnMgYmFuZCIgeD0iMjEwIiB5PSI2MDciIGZpbGw9IiNmZmYiPlA8dHNwYW4gYmFzZWxpbmUtc2hpZnQ9InN1YiIgZm9udC1zaXplPSIxMiI+dDwvdHNwYW4+ID0gUHJvamVjdChTPHRzcGFuIGJhc2VsaW5lLXNoaWZ0PSJzdWIiIGZvbnQtc2l6ZT0iMTIiPnQ8L3RzcGFuPiwgY3VycmVudCB0YXNrLCBwb2xpY3kpPC90ZXh0PgogIDx0ZXh0IGNsYXNzPSJzYW5zIGJvZHkiIHg9IjIxMCIgeT0iNjM4IiBmaWxsPSIjYjljOWQ4Ij5TdGF0ZSDlj6/ku6XmjIHnu63lj5jkuLDlr4zvvJvkuIDmrKEgTExNIGNhbGwg5LuN5Y+q5o6l5pS25b2T5YmN5Lu75Yqh6ZyA6KaB55qE5oqV5b2x44CCPC90ZXh0Pgo8L3N2Zz4K" alt="Agent feature timeline showing state scope expanding from a local linear trace to a structured runtime representation of a complex world.">
+          <figcaption><strong>Figure 6.</strong> 时间点用于标记代表性公开节点，不声称某个概念在该年才首次出现。ReAct 已经是 Agent Loop；后续变化是 loop 所覆盖的 World、State 结构和控制范围不断扩大。</figcaption>
+        </figure>
+
+        <div class="timeline-sources" aria-label="时间轴公开来源">
+          <a href="https://arxiv.org/abs/2210.03629" target="_blank" rel="noopener">2022 · ReAct</a>
+          <a href="https://openai.com/index/function-calling-and-other-api-updates/" target="_blank" rel="noopener">2023 · Function Calling</a>
+          <a href="https://www.anthropic.com/news/model-context-protocol" target="_blank" rel="noopener">2024 · MCP</a>
+          <a href="https://openai.com/index/introducing-codex/" target="_blank" rel="noopener">2025 · Codex</a>
+          <a href="https://www.anthropic.com/engineering/equipping-agents-for-the-real-world-with-agent-skills" target="_blank" rel="noopener">2025 · Agent Skills</a>
+          <a href="https://openai.com/index/harness-engineering/" target="_blank" rel="noopener">2026 · Harness Engineering</a>
+        </div>
+
+        <div class="big-claim">趋势不是“把更多文字塞进 Prompt”，而是让 runtime 的 State <em>能够引用、观察、组织和控制更复杂的真实世界</em>；每次模型调用仍只看当前任务需要的投影。</div>
+
+        <p class="state-boundary-note"><strong>边界：</strong>State 不等于 World 的完整副本。它更像 World 的局部模型与 control plane：保存 capability、observation、证据、约束、分支和重新观察世界的 handle。</p>
+      </section>
+
+      <section class="chapter" id="state-operations">
+        <div class="chapter-head">
+          <div class="chapter-no">07</div>
+          <h2>看似不同的 Feature，只修改五种 State 操作</h2>
+        </div>
+        <p class="chapter-intro">把产品名拿掉，MCP、Skill、Subagent、Hooks、Memory 和 Harness 都可以定位到同一个 State Machine 的不同部位。</p>
+
+        <div class="state-ops-grid" aria-label="五种状态操作">
+          <article class="state-op">
+            <span class="op-name">01 · ACQUIRE / ACT</span>
+            <h3>连接和改变 World</h3>
+            <p>决定 runtime 能观察哪些外部系统、能执行哪些真实动作。</p>
+            <div class="op-pills"><span>Tools</span><span>MCP</span><span>Browser</span></div>
+          </article>
+          <article class="state-op">
+            <span class="op-name">02 · STORE / VERSION</span>
+            <h3>保存状态与证据</h3>
+            <p>决定哪些事实、结果、checkpoint 与来源可以被恢复和审计。</p>
+            <div class="op-pills"><span>Trace</span><span>Memory</span><span>Checkpoint</span></div>
+          </article>
+          <article class="state-op">
+            <span class="op-name">03 · PROJECT</span>
+            <h3>构造本轮 Model View</h3>
+            <p>选择当前任务所需的 history、procedure、tool schema 与 evidence。</p>
+            <div class="op-pills"><span>Skill</span><span>Retrieval</span><span>Compaction</span></div>
+          </article>
+          <article class="state-op">
+            <span class="op-name">04 · FORK / MERGE</span>
+            <h3>改变 State Topology</h3>
+            <p>把线性 trajectory 扩张为有 lineage、隔离与回流规则的状态图。</p>
+            <div class="op-pills"><span>Subagent</span><span>Worktree</span><span>Parallel</span></div>
+          </article>
+          <article class="state-op">
+            <span class="op-name">05 · CONTROL / VERIFY</span>
+            <h3>控制 State Transition</h3>
+            <p>决定何时允许执行、验证、重试、压缩、继续或停止。</p>
+            <div class="op-pills"><span>Harness</span><span>Hooks</span><span>Loop Policy</span></div>
+          </article>
+        </div>
+
+        <div class="projection-bar">
+          <span>ONE MODEL CALL</span>
+          <code>P<sub>t</sub> = Project(S<sub>t</sub>, current task, policy)</code>
+        </div>
+
+        <div class="state-interface-claim"><strong>State 变丰富，不等于 Prompt 变长。</strong>完整 trace、远程 capability、child trajectory 与 checkpoint 可以留在 runtime；本轮 LLM call 只接收它需要的 materialized view。</div>
+      </section>
+
+      <section class="chapter" id="mcp-extension">
+        <div class="chapter-head">
+          <div class="chapter-no">08</div>
+          <h2>MCP：把远程 CI 接进 Agent Loop</h2>
+        </div>
+        <p class="chapter-intro">任务：“远程 CI 有一个失败测试，请定位原因、修复并验证。”基础 Agent 只能读取本地仓库；加入 MCP 后，runtime 可以发现远程 CI 工具，并把结果作为带来源的 observation 写回 State。</p>
+
+        <div class="feature-example-grid">
+          <div class="loop-code feature-code" aria-label="加入 MCP 后的 Agent Loop 伪代码">
+            <div class="loop-code-head"><span>MCP EXTENSION</span><span>CONCEPTUAL DIFF</span></div>
+            <pre><span class="code-state">state</span> ← initialize(user_request)
+local_tools ← load_local_tools()
+<span class="code-add">mcp ← connect(configured_servers)</span>
+<span class="code-add">state.capabilities ← discover(mcp)</span>
+
+<span class="code-kw">while</span> true:
+    view ← build_context(state)
+<span class="code-add">    remote_tools ← select_tools(</span>
+<span class="code-add">        state.capabilities, state.goal</span>
+<span class="code-add">    )</span>
+    tools ← local_tools ∪ remote_tools
+
+<span class="stable-core">    decision ← LLM(view, tools)</span>
+
+<span class="code-add orange">    if decision.tool_call is MCP:</span>
+<span class="code-add orange">        raw ← MCP.call(decision.tool_call)</span>
+    else:
+        raw ← LocalRuntime.execute(
+            decision.tool_call
+        )
+
+<span class="code-add">    observation ← normalize(</span>
+<span class="code-add">        raw, source, timestamp</span>
+<span class="code-add">    )</span>
+    <span class="code-state">state ← update(state, observation)</span></pre>
+            <p class="loop-gloss">绿色行扩张 capability 与 observation state；橙色行扩张 execution router。蓝框中的模型调用结构没有改变。</p>
+          </div>
+
+          <div class="state-diff-panel" aria-label="加入 MCP 前后的 State 差异">
+            <article class="state-diff-card">
+              <span class="diff-label">STATE BEFORE</span>
+              <pre class="state-tree">S
+├── goal
+├── local_history
+├── local_tools
+└── local_observations</pre>
+            </article>
+            <div class="state-diff-arrow">↓ + MCP</div>
+            <article class="state-diff-card after">
+              <span class="diff-label">STATE AFTER</span>
+              <pre class="state-tree">S
+├── capability_catalog
+│   └── ci.get_failed_job
+│       ├── server / schema
+│       └── availability / policy
+└── observations
+    └── CI failure
+        ├── job_id / timestamp
+        └── source = ci-server</pre>
+            </article>
+          </div>
+        </div>
+
+        <div class="scenario-strip" aria-label="MCP 调用如何进入状态循环">
+          <article class="scenario-step">
+            <b>1 · Discover</b>
+            <code>list_all_tools()</code>
+            <p>runtime 从 server 获取 capability，而不是要求模型预先记住 API。</p>
+          </article>
+          <article class="scenario-step">
+            <b>2 · Project</b>
+            <code>select(ci.get_failed_job)</code>
+            <p>只有当前任务需要的 tool schema 进入这次模型请求。</p>
+          </article>
+          <article class="scenario-step">
+            <b>3 · Execute</b>
+            <code>MCP.call(job_id)</code>
+            <p>模型只提出调用；client、server、认证与真实执行由 runtime 处理。</p>
+          </article>
+          <article class="scenario-step">
+            <b>4 · Write back</b>
+            <code>Observation(source=ci)</code>
+            <p>远程结果带着来源进入 State，下一轮重新投影后模型才看见它。</p>
+          </article>
+        </div>
+
+        <div class="skill-contrast">
+          <article>
+            <span class="tag">MCP</span>
+            <h3>“我能访问什么？”</h3>
+            <p>提供实时的外部 tool、resource 与 action surface，主要修改 capability discovery 和 execution routing。</p>
+          </article>
+          <article>
+            <span class="tag blue">SKILL</span>
+            <h3>“这类任务应该怎样做？”</h3>
+            <p>选择并加载 procedure、reference 与 script，主要修改 <code>build_context</code> 和 transition policy。</p>
+          </article>
+        </div>
+
+        <div class="source-evidence-grid">
+          <div class="source-block">
+            <div class="source-head"><span>session/turn.rs · MCP tools</span><span>abridged source</span></div>
+            <pre><span class="kw">let</span> all_mcp_tools = mcp_connection_manager
+    .<span class="fn">list_all_tools</span>().await?;
+
+<span class="kw">let</span> exposure = <span class="fn">build_mcp_tool_exposure</span>(...);
+
+<span class="ty">ToolRouter</span>::<span class="fn">from_context</span>(
+    step_context,
+    <span class="ty">ToolRouterParams</span> { mcp_tools, ... },
+)</pre>
+          </div>
+          <div class="source-block">
+            <div class="source-head"><span>session/turn.rs · Skill projection</span><span>abridged source</span></div>
+            <pre><span class="kw">let</span> mentioned_skills =
+    <span class="fn">collect_explicit_skill_mentions</span>(...);
+
+<span class="kw">let</span> injections =
+    <span class="fn">build_skill_injections</span>(...);
+
+<span class="ty">ContextualUserFragment</span>::into(
+    <span class="ty">SkillInstructions</span>::from(skill)
+)</pre>
+          </div>
+        </div>
+
+        <p class="implementation-boundary"><strong>Claim boundary：</strong><code>connect / discover / select_tools</code> 是教学伪代码。Codex 的真实实现分布在 MCP connection manager、tool exposure 与 ToolRouter；Skill 则被转换为 contextual instruction items。两者最终都影响 request，但 contract 不同。</p>
+      </section>
+
+      <section class="chapter" id="subagent-extension">
+        <div class="chapter-head">
+          <div class="chapter-no">09</div>
+          <h2>Subagent：把一条 State 序列变成 State Graph</h2>
+        </div>
+        <p class="chapter-intro">父 Agent 已经通过 MCP 获得 CI failure。它把“读取日志与相关测试、定位根因，不修改文件”交给一个 child；child 在独立 thread 中运行同一个 Agent Loop，最后只把有边界的结果与证据返回父线程。</p>
+
+        <div class="feature-example-grid">
+          <div class="loop-code feature-code" aria-label="加入 Subagent 后的 Agent Loop 伪代码">
+            <div class="loop-code-head"><span>SUBAGENT EXTENSION</span><span>CONCEPTUAL DIFF</span></div>
+            <pre><span class="code-kw">while</span> true:
+    view ← build_context(state)
+<span class="stable-core">    decision ← LLM(view, tools)</span>
+    action ← decision.tool_call
+
+<span class="code-add orange">    if action.name == "spawn_agent":</span>
+<span class="code-add orange">        child_state ← fork_state(</span>
+<span class="code-add orange">            parent=state,</span>
+<span class="code-add orange">            goal=action.task,</span>
+<span class="code-add orange">            history=select_history(</span>
+<span class="code-add orange">                state, action.fork_turns</span>
+<span class="code-add orange">            )</span>
+<span class="code-add orange">        )</span>
+<span class="code-add">        child_id ← Runtime.spawn(</span>
+<span class="code-add">            AgentLoop(child_state)</span>
+<span class="code-add">        )</span>
+<span class="code-add">        state.agent_graph.add(child_id)</span>
+<span class="code-add">        result ← Runtime.wait(child_id)</span>
+<span class="code-add">        state ← merge_child_result(</span>
+<span class="code-add">            state, result.evidence</span>
+<span class="code-add">        )</span>
+<span class="code-add">        continue</span>
+
+    observation ← Runtime.execute(action)
+    state ← update(state, observation)</pre>
+            <p class="loop-gloss"><code>spawn_agent</code> 可以仍表现为一次 tool action；特殊之处是 handler 启动了另一份 loop，并为它建立独立 State 与 lineage。</p>
+          </div>
+
+          <figure class="feature-figure subagent">
+            <img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI3NjAiIGhlaWdodD0iMTE1MCIgdmlld0JveD0iMCAwIDc2MCAxMTUwIiByb2xlPSJpbWciIGFyaWEtbGFiZWxsZWRieT0idGl0bGUgZGVzYyI+CiAgPHRpdGxlIGlkPSJ0aXRsZSI+U3ViYWdlbnQgdHVybnMgYSBsaW5lYXIgc3RhdGUgdHJhamVjdG9yeSBpbnRvIGEgc3RhdGUgZ3JhcGg8L3RpdGxlPgogIDxkZXNjIGlkPSJkZXNjIj5BIHBvcnRyYWl0IGRpYWdyYW0uIEEgcGFyZW50IGFnZW50IHNwYXducyBhIHNjb3BlZCByZWFkLW9ubHkgY2hpbGQuIFRoZSBjaGlsZCByZWNlaXZlcyBzZWxlY3RlZCBzdGF0ZSwgcnVucyBpdHMgb3duIG1vZGVsIGFuZCB0b29sIGxvb3AsIHJldHVybnMgYm91bmRlZCBldmlkZW5jZSwgYW5kIHRoZSBwYXJlbnQgcmVjb3JkcyB0aGF0IG9ic2VydmF0aW9uIGJlZm9yZSByZXByb2plY3RpbmcuPC9kZXNjPgogIDxkZWZzPgogICAgPG1hcmtlciBpZD0iYXJyb3ctYmx1ZSIgbWFya2VyV2lkdGg9IjEwIiBtYXJrZXJIZWlnaHQ9IjEwIiByZWZYPSI4IiByZWZZPSI1IiBvcmllbnQ9ImF1dG8iPjxwYXRoIGQ9Ik0wIDBMMTAgNUwwIDEwWiIgZmlsbD0iIzMxNWY5NCIvPjwvbWFya2VyPgogICAgPG1hcmtlciBpZD0iYXJyb3ctdGVhbCIgbWFya2VyV2lkdGg9IjEwIiBtYXJrZXJIZWlnaHQ9IjEwIiByZWZYPSI4IiByZWZZPSI1IiBvcmllbnQ9ImF1dG8iPjxwYXRoIGQ9Ik0wIDBMMTAgNUwwIDEwWiIgZmlsbD0iIzBmNzY2ZSIvPjwvbWFya2VyPgogICAgPG1hcmtlciBpZD0iYXJyb3ctb3JhbmdlIiBtYXJrZXJXaWR0aD0iMTAiIG1hcmtlckhlaWdodD0iMTAiIHJlZlg9IjgiIHJlZlk9IjUiIG9yaWVudD0iYXV0byI+PHBhdGggZD0iTTAgMEwxMCA1TDAgMTBaIiBmaWxsPSIjYWQ0ZDIzIi8+PC9tYXJrZXI+CiAgICA8c3R5bGU+CiAgICAgIC5zYW5ze2ZvbnQtZmFtaWx5OkludGVyLCJOb3RvIFNhbnMgQ0pLIFNDIiwiTWljcm9zb2Z0IFlhSGVpIixzYW5zLXNlcmlmfQogICAgICAubW9ub3tmb250LWZhbWlseToiU0ZNb25vLVJlZ3VsYXIiLENvbnNvbGFzLCJMaWJlcmF0aW9uIE1vbm8iLG1vbm9zcGFjZX0KICAgICAgLmV5ZWJyb3d7Zm9udC1zaXplOjE4cHg7Zm9udC13ZWlnaHQ6ODAwO2xldHRlci1zcGFjaW5nOjEuN3B4fQogICAgICAuaGVhZGxpbmV7Zm9udC1zaXplOjMycHg7Zm9udC13ZWlnaHQ6NzgwfQogICAgICAubGFuZXtmb250LXNpemU6MTlweDtmb250LXdlaWdodDo4NTA7bGV0dGVyLXNwYWNpbmc6MS4ycHh9CiAgICAgIC5ub2Rle2ZvbnQtc2l6ZToyNXB4O2ZvbnQtd2VpZ2h0Ojg1MH0KICAgICAgLmNhcmQtdGl0bGV7Zm9udC1zaXplOjIxcHg7Zm9udC13ZWlnaHQ6NzgwfQogICAgICAuYm9keXtmb250LXNpemU6MThweDtmb250LXdlaWdodDo1NjB9CiAgICAgIC5zbWFsbHtmb250LXNpemU6MTdweDtmb250LXdlaWdodDo2ODB9CiAgICAgIC50aW55e2ZvbnQtc2l6ZToxNXB4O2ZvbnQtd2VpZ2h0OjcwMH0KICAgIDwvc3R5bGU+CiAgPC9kZWZzPgoKICA8cmVjdCB3aWR0aD0iNzYwIiBoZWlnaHQ9IjExNTAiIHJ4PSIzMCIgZmlsbD0iI2Y3ZjZmMiIvPgogIDx0ZXh0IGNsYXNzPSJzYW5zIGV5ZWJyb3ciIHg9IjQyIiB5PSI0OCIgZmlsbD0iIzBmNzY2ZSI+RklHVVJFIDA5IMK3IExJTkVBUiBTVEFURSDihpIgU1RBVEUgR1JBUEg8L3RleHQ+CiAgPHRleHQgY2xhc3M9InNhbnMgaGVhZGxpbmUiIHg9IjQyIiB5PSI5MiIgZmlsbD0iIzE3MjgzZCI+c3Bhd25fYWdlbnQg5Yib5bu65Y+m5LiA5p2hIEFnZW50IExvb3A8L3RleHQ+CiAgPHRleHQgY2xhc3M9InNhbnMgYm9keSIgeD0iNDIiIHk9IjEyNCIgZmlsbD0iIzYwNzE4NCI+54i257q/56iL5rS+55Sf54us56uLIHRyYWplY3RvcnnvvIzmnIDlkI7lj6rmjqXmlLbmnInovrnnlYznmoQgb2JzZXJ2YXRpb248L3RleHQ+CgogIDxyZWN0IHg9IjQyIiB5PSIxNTgiIHdpZHRoPSI2NzYiIGhlaWdodD0iMTkwIiByeD0iMjIiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iI2I3Y2JlNCIgc3Ryb2tlLXdpZHRoPSIxLjUiLz4KICA8dGV4dCBjbGFzcz0ibW9ubyBsYW5lIiB4PSI2OCIgeT0iMTkyIiBmaWxsPSIjMzE1Zjk0Ij5QQVJFTlQgVEhSRUFEPC90ZXh0PgogIDx0ZXh0IGNsYXNzPSJzYW5zIHNtYWxsIiB4PSI2OTIiIHk9IjE5MiIgdGV4dC1hbmNob3I9ImVuZCIgZmlsbD0iIzYwNzE4NCI+bGluZWFyIHN0YXRlPC90ZXh0PgoKICA8bGluZSB4MT0iMTU2IiB5MT0iMjU2IiB4Mj0iMjA0IiB5Mj0iMjU2IiBzdHJva2U9IiM4ZGE0YmEiIHN0cm9rZS13aWR0aD0iMyIgbWFya2VyLWVuZD0idXJsKCNhcnJvdy1ibHVlKSIvPgogIDxsaW5lIHgxPSIzMDQiIHkxPSIyNTYiIHgyPSIzNTAiIHkyPSIyNTYiIHN0cm9rZT0iIzhkYTRiYSIgc3Ryb2tlLXdpZHRoPSIzIiBtYXJrZXItZW5kPSJ1cmwoI2Fycm93LWJsdWUpIi8+CiAgPHJlY3QgeD0iNzAiIHk9IjIyNSIgd2lkdGg9Ijg2IiBoZWlnaHQ9IjYyIiByeD0iMTYiIGZpbGw9IiNlYWYxZmIiIHN0cm9rZT0iIzlhYjZkNSIvPgogIDx0ZXh0IGNsYXNzPSJtb25vIG5vZGUiIHg9IjExMyIgeT0iMjY0IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMzE1Zjk0Ij5T4oKAPC90ZXh0PgogIDxyZWN0IHg9IjIxOCIgeT0iMjI1IiB3aWR0aD0iODYiIGhlaWdodD0iNjIiIHJ4PSIxNiIgZmlsbD0iI2VhZjFmYiIgc3Ryb2tlPSIjOWFiNmQ1Ii8+CiAgPHRleHQgY2xhc3M9Im1vbm8gbm9kZSIgeD0iMjYxIiB5PSIyNjQiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiMzMTVmOTQiPlPigoE8L3RleHQ+CgogIDxyZWN0IHg9IjM1MCIgeT0iMjEwIiB3aWR0aD0iMzI2IiBoZWlnaHQ9Ijk0IiByeD0iMTgiIGZpbGw9IiNmZmYxZTciIHN0cm9rZT0iI2U0YTc3ZSIgc3Ryb2tlLXdpZHRoPSIxLjUiLz4KICA8dGV4dCBjbGFzcz0ibW9ubyBzbWFsbCIgeD0iMzcyIiB5PSIyMzkiIGZpbGw9IiNhZDRkMjMiPkFDVElPTiDCtyBzcGF3bl9hZ2VudDwvdGV4dD4KICA8dGV4dCBjbGFzcz0ic2FucyBjYXJkLXRpdGxlIiB4PSIzNzIiIHk9IjI2OSIgZmlsbD0iIzcxM2MyNSI+5a6a5L2N6L+c56iLIENJIOWksei0peeahOagueWboDwvdGV4dD4KICA8dGV4dCBjbGFzcz0ic2FucyBzbWFsbCIgeD0iMzcyIiB5PSIyOTEiIGZpbGw9IiM4YTYyNTAiPnJlYWQtb25seSDCtyBzZWxlY3RlZCBoaXN0b3J5PC90ZXh0PgogIDx0ZXh0IGNsYXNzPSJzYW5zIHRpbnkiIHg9IjcwIiB5PSIzMjgiIGZpbGw9IiM2MDcxODQiPlPigoAg4oaSIFPigoEg5piv54i2IEFnZW50IOWOn+i9qOi/ue+8m3NwYXduIOaYr+aciee7k+aehOeahCBhY3Rpb27jgII8L3RleHQ+CgogIDxwYXRoIGQ9Ik01MTMgMzA0IEw1MTMgMzkxIiBmaWxsPSJub25lIiBzdHJva2U9IiNhZDRkMjMiIHN0cm9rZS13aWR0aD0iMyIgbWFya2VyLWVuZD0idXJsKCNhcnJvdy1vcmFuZ2UpIi8+CiAgPHJlY3QgeD0iMTk2IiB5PSIzNTgiIHdpZHRoPSIyOTQiIGhlaWdodD0iMzgiIHJ4PSIxMiIgZmlsbD0iI2ZmZmZmZiIgc3Ryb2tlPSIjZTRhNzdlIi8+CiAgPHRleHQgY2xhc3M9Im1vbm8gdGlueSIgeD0iMzQzIiB5PSIzODIiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiNhZDRkMjMiPmZvcmsoZ29hbCwgaGlzdG9yeSwgdG9vbHMsIGJ1ZGdldCk8L3RleHQ+CgogIDxyZWN0IHg9IjQyIiB5PSI0MTAiIHdpZHRoPSI2NzYiIGhlaWdodD0iNDA4IiByeD0iMjQiIGZpbGw9IiNlZWY4ZjUiIHN0cm9rZT0iIzkzYzZiYyIgc3Ryb2tlLXdpZHRoPSIxLjUiLz4KICA8dGV4dCBjbGFzcz0ibW9ubyBsYW5lIiB4PSI2OCIgeT0iNDQ2IiBmaWxsPSIjMGY3NjZlIj5DSElMRCBUSFJFQUQ8L3RleHQ+CiAgPHJlY3QgeD0iNDkzIiB5PSI0MjQiIHdpZHRoPSIxOTkiIGhlaWdodD0iMzQiIHJ4PSIxMSIgZmlsbD0iI2RmZjFlYyIvPgogIDx0ZXh0IGNsYXNzPSJtb25vIHRpbnkiIHg9IjU5MiIgeT0iNDQ2IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMGY3NjZlIj5JTkRFUEVOREVOVCBTVEFURTwvdGV4dD4KCiAgPGxpbmUgeDE9IjEyOCIgeTE9IjUyNCIgeDI9IjEyOCIgeTI9IjU2OCIgc3Ryb2tlPSIjNzNhYzlmIiBzdHJva2Utd2lkdGg9IjMiIG1hcmtlci1lbmQ9InVybCgjYXJyb3ctdGVhbCkiLz4KICA8bGluZSB4MT0iMTI4IiB5MT0iNjI0IiB4Mj0iMTI4IiB5Mj0iNjY4IiBzdHJva2U9IiM3M2FjOWYiIHN0cm9rZS13aWR0aD0iMyIgbWFya2VyLWVuZD0idXJsKCNhcnJvdy10ZWFsKSIvPgoKICA8cmVjdCB4PSI3NiIgeT0iNDY2IiB3aWR0aD0iMTA0IiBoZWlnaHQ9IjYyIiByeD0iMTciIGZpbGw9IiNkZmYxZWMiIHN0cm9rZT0iIzgzYmRiMiIvPgogIDx0ZXh0IGNsYXNzPSJtb25vIG5vZGUiIHg9IjEyOCIgeT0iNTA1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMGY3NjZlIj5D4oKAPC90ZXh0PgogIDxyZWN0IHg9IjIxNCIgeT0iNDY2IiB3aWR0aD0iNDU0IiBoZWlnaHQ9IjYyIiByeD0iMTYiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iI2I4ZDhkMSIvPgogIDx0ZXh0IGNsYXNzPSJtb25vIHRpbnkiIHg9IjIzNCIgeT0iNDkwIiBmaWxsPSIjMGY3NjZlIj5SRUNFSVZFIFNDT1BFPC90ZXh0PgogIDx0ZXh0IGNsYXNzPSJzYW5zIGJvZHkiIHg9IjIzNCIgeT0iNTE1IiBmaWxsPSIjMjg1YjU2Ij5nb2FsICsgc2VsZWN0ZWQgaGlzdG9yeSArIHRvb2xzICsgYnVkZ2V0PC90ZXh0PgoKICA8cmVjdCB4PSI3NiIgeT0iNTY2IiB3aWR0aD0iMTA0IiBoZWlnaHQ9IjYyIiByeD0iMTciIGZpbGw9IiNkZmYxZWMiIHN0cm9rZT0iIzgzYmRiMiIvPgogIDx0ZXh0IGNsYXNzPSJtb25vIG5vZGUiIHg9IjEyOCIgeT0iNjA1IiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjMGY3NjZlIj5D4oKBPC90ZXh0PgogIDxyZWN0IHg9IjIxNCIgeT0iNTY2IiB3aWR0aD0iNDU0IiBoZWlnaHQ9IjYyIiByeD0iMTYiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iI2I4ZDhkMSIvPgogIDx0ZXh0IGNsYXNzPSJtb25vIHRpbnkiIHg9IjIzNCIgeT0iNTkwIiBmaWxsPSIjMGY3NjZlIj5PV04gQUdFTlQgTE9PUDwvdGV4dD4KICA8dGV4dCBjbGFzcz0ic2FucyBib2R5IiB4PSIyMzQiIHk9IjYxNSIgZmlsbD0iIzI4NWI1NiI+5aSa6L2uIExMTSAvIHRvb2zvvJror7vml6Xlv5cgwrcg5pCc5Luj56CBIMK3IOi3keajgOafpTwvdGV4dD4KCiAgPHJlY3QgeD0iNzYiIHk9IjY2NiIgd2lkdGg9IjEwNCIgaGVpZ2h0PSI2MiIgcng9IjE3IiBmaWxsPSIjZGZmMWVjIiBzdHJva2U9IiM4M2JkYjIiLz4KICA8dGV4dCBjbGFzcz0ibW9ubyBub2RlIiB4PSIxMjgiIHk9IjcwNSIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iIzBmNzY2ZSI+Q+KCgjwvdGV4dD4KICA8cmVjdCB4PSIyMTQiIHk9IjY2NiIgd2lkdGg9IjQ1NCIgaGVpZ2h0PSI2MiIgcng9IjE2IiBmaWxsPSIjZmZmZmZmIiBzdHJva2U9IiNiOGQ4ZDEiLz4KICA8dGV4dCBjbGFzcz0ibW9ubyB0aW55IiB4PSIyMzQiIHk9IjY5MCIgZmlsbD0iIzBmNzY2ZSI+Rk9STSBFVklERU5DRTwvdGV4dD4KICA8dGV4dCBjbGFzcz0ic2FucyBib2R5IiB4PSIyMzQiIHk9IjcxNSIgZmlsbD0iIzI4NWI1NiI+c3VtbWFyeSArIGZpbGUgcmVmcyArIGV2aWRlbmNlPC90ZXh0PgoKICA8cmVjdCB4PSI2OCIgeT0iNzU2IiB3aWR0aD0iNjI0IiBoZWlnaHQ9IjQyIiByeD0iMTMiIGZpbGw9IiMxNzI4M2QiLz4KICA8dGV4dCBjbGFzcz0ibW9ubyB0aW55IiB4PSI4OCIgeT0iNzgyIiBmaWxsPSIjODBlMWQxIj5TVEFURSBBRERTPC90ZXh0PgogIDx0ZXh0IGNsYXNzPSJzYW5zIHRpbnkiIHg9IjE5NSIgeT0iNzgyIiBmaWxsPSIjZGNlOGYzIj5hZ2VudF9pZCDCtyBwYXJlbnRfaWQgwrcgZm9yayDCtyBzdGF0dXMgwrcgYnVkZ2V0IMK3IGxpbmVhZ2U8L3RleHQ+CgogIDxwYXRoIGQ9Ik00NDEgNzI4IEw0NDEgODM2IiBmaWxsPSJub25lIiBzdHJva2U9IiMwZjc2NmUiIHN0cm9rZS13aWR0aD0iMyIgbWFya2VyLWVuZD0idXJsKCNhcnJvdy10ZWFsKSIvPgogIDxyZWN0IHg9IjExOCIgeT0iODQyIiB3aWR0aD0iNTI0IiBoZWlnaHQ9Ijc2IiByeD0iMTgiIGZpbGw9IiNmZmZmZmYiIHN0cm9rZT0iIzgzYmRiMiIgc3Ryb2tlLXdpZHRoPSIxLjUiLz4KICA8dGV4dCBjbGFzcz0ibW9ubyBzbWFsbCIgeD0iMzgwIiB5PSI4NzAiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiMwZjc2NmUiPkJPVU5ERUQgQ0hJTEQgT0JTRVJWQVRJT048L3RleHQ+CiAgPHRleHQgY2xhc3M9InNhbnMgYm9keSIgeD0iMzgwIiB5PSI4OTciIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiMyODViNTYiPui/lOWbnuS7u+WKoee7k+aenOS4juivgeaNru+8jOiAjOS4jeaYr+iHquWKqOaLvOaOpeaVtOS4qiBjaGlsZCB0cmFuc2NyaXB0PC90ZXh0PgoKICA8cGF0aCBkPSJNMzgwIDkxOCBMMzgwIDk1MCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMGY3NjZlIiBzdHJva2Utd2lkdGg9IjMiIG1hcmtlci1lbmQ9InVybCgjYXJyb3ctdGVhbCkiLz4KICA8cmVjdCB4PSI0MiIgeT0iOTU4IiB3aWR0aD0iNjc2IiBoZWlnaHQ9IjkyIiByeD0iMjIiIGZpbGw9IiMxNzI4M2QiLz4KICA8cmVjdCB4PSI2OCIgeT0iOTc1IiB3aWR0aD0iNzIiIGhlaWdodD0iNTgiIHJ4PSIxNiIgZmlsbD0iIzI2M2I1NSIgc3Ryb2tlPSIjODBlMWQxIi8+CiAgPHRleHQgY2xhc3M9Im1vbm8gbm9kZSIgeD0iMTA0IiB5PSIxMDEyIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBmaWxsPSIjODBlMWQxIj5T4oKCPC90ZXh0PgogIDx0ZXh0IGNsYXNzPSJtb25vIHNtYWxsIiB4PSIxNjQiIHk9Ijk5MCIgZmlsbD0iIzgwZTFkMSI+UEFSRU5UIFJFU1VNRTwvdGV4dD4KICA8dGV4dCBjbGFzcz0ic2FucyBjYXJkLXRpdGxlIiB4PSIxNjQiIHk9IjEwMTgiIGZpbGw9IiNmZmZmZmYiPuiusOW9lSBldmlkZW5jZe+8jOmHjeaWsOaehOmAoOS4i+S4gOasoSBwcm9qZWN0aW9uPC90ZXh0PgogIDx0ZXh0IGNsYXNzPSJzYW5zIHRpbnkiIHg9IjE2NCIgeT0iMTAzOSIgZmlsbD0iI2I5YzlkOCI+54i2IEFnZW50IOWGs+WumumqjOivgeOAgee7p+e7reOAgeWQiOW5tuaIluWBnOatouOAgjwvdGV4dD4KCiAgPHJlY3QgeD0iNDIiIHk9IjEwNzAiIHdpZHRoPSI2NzYiIGhlaWdodD0iNTQiIHJ4PSIxNiIgZmlsbD0iI2ZmZjFlNyIgc3Ryb2tlPSIjZTRhNzdlIi8+CiAgPHRleHQgY2xhc3M9InNhbnMgc21hbGwiIHg9IjM4MCIgeT0iMTA5MyIgdGV4dC1hbmNob3I9Im1pZGRsZSIgZmlsbD0iI2FkNGQyMyI+5YWx5LqrIFdvcmxkIOS4jeS8muiHquWKqOWQiOW5tjwvdGV4dD4KICA8dGV4dCBjbGFzcz0ic2FucyB0aW55IiB4PSIzODAiIHk9IjExMTMiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGZpbGw9IiM4YTYyNTAiPuWGmeWFpemalOemu+OAgXdvcmxkLWRlbHRhIHZhbGlkYXRpb24g5LiO5Yay56qB5aSE55CG5LuN5piv5Y+m5LiA5bGCIHBvbGljeTwvdGV4dD4KPC9zdmc+Cg==" alt="Portrait state graph showing a parent agent forking a scoped child loop, receiving bounded evidence, and resuming from updated state.">
+            <figcaption><strong>Figure 9.</strong> Parent 记录 child identity、fork mode 与 status；child 自己完成多次 model/tool 交互。回流的是 child observation，而不是自动把整个 child transcript 拼进父 prompt。</figcaption>
+          </figure>
+        </div>
+
+        <div class="subagent-state-chips" aria-label="Subagent 新增的运行时状态">
+          <span>agent_id</span><span>parent_thread_id</span><span>fork_mode</span><span>selected history</span>
+          <span>child goal</span><span>tools / permissions</span><span>budget</span><span>status</span><span>returned evidence</span>
+        </div>
+
+        <div class="source-evidence-grid">
+          <div class="source-block">
+            <div class="source-head"><span>multi_agents_v2/spawn.rs</span><span>abridged source</span></div>
+            <pre><span class="kw">let</span> fork_mode = args.<span class="fn">fork_mode</span>()?;
+<span class="kw">let</span> spawn_source = <span class="fn">thread_spawn_source</span>(
+    session.thread_id, ..., child_depth, ...
+)?;
+
+agent_control.<span class="fn">spawn_agent_with_communication</span>(
+    config,
+    communication,
+    context,
+    Some(spawn_source),
+    <span class="ty">SpawnAgentOptions</span> {
+        fork_mode,
+        parent_thread_id: Some(session.thread_id),
+        ...
+    },
+).await?</pre>
+          </div>
+          <article class="card teal">
+            <span class="tag">WHY READ-ONLY FIRST?</span>
+            <h3>先隔离探索噪声，再讨论写冲突</h3>
+            <p>read-heavy exploration、tests、triage 和 log analysis 最容易独立。若父子同时改同一仓库，还需要 worktree、world-delta validation 与 conflict policy；这不是“多开一个模型”自动解决的。</p>
+          </article>
+        </div>
+
+        <div class="warning"><strong>不要把 merge 简化为 transcript append：</strong>child 可能读了大量日志、执行了多轮搜索。父线程真正需要的通常是结论、file reference、evidence 与未解决问题；共享 World 的修改则必须单独验证。</div>
+      </section>
+
+      <section class="chapter" id="loop-engineering">
+        <div class="chapter-head">
+          <div class="chapter-no">10</div>
+          <h2>Harness、Hooks 与 Loop Engineering：谁决定 State 怎样变化？</h2>
+        </div>
+        <p class="chapter-intro">三个词处在不同层次：Harness 是运行循环的程序；Hooks 是可插入的生命周期边界；Loop Engineering 是对 projection、execution、verification、retry、compaction、delegation 和 stop policy 的整体设计。</p>
+
+        <div class="runtime-definitions">
+          <article class="runtime-definition">
+            <span class="tag blue">HARNESS</span>
+            <h3>可执行的 Runtime 骨架</h3>
+            <p>真正维护 State、调用模型、路由工具、捕获 observation 并决定是否继续。</p>
+          </article>
+          <article class="runtime-definition">
+            <span class="tag">HOOKS</span>
+            <h3>生命周期 Extension Points</h3>
+            <p>允许外部脚本在特定边界注入 context、修改输入、阻止动作或请求继续。</p>
+          </article>
+          <article class="runtime-definition">
+            <span class="tag orange">LOOP ENGINEERING</span>
+            <h3>State Transition 设计学</h3>
+            <p>决定状态怎样投影、验证、分支、压缩、恢复和停止，不等于某一个 hook 或产品 feature。</p>
+          </article>
+        </div>
+
+        <div class="hook-boundaries" aria-label="Codex lifecycle hooks 与 Agent Loop 的对应位置">
+          <article class="hook-boundary">
+            <span>BEFORE TURN</span>
+            <h3>Session / Prompt</h3>
+            <p>SessionStart、UserPromptSubmit 可以注入 additional context 或提前阻止。</p>
+          </article>
+          <article class="hook-boundary">
+            <span>BEFORE ACTION</span>
+            <h3>PreToolUse</h3>
+            <p>检查或更新 tool input；PermissionRequest 可以给出授权决定。</p>
+          </article>
+          <article class="hook-boundary">
+            <span>AFTER ACTION</span>
+            <h3>PostToolUse</h3>
+            <p>处理 model-visible response；不能撤销已经发生的 World effect。</p>
+          </article>
+          <article class="hook-boundary">
+            <span>CONTEXT LIFECYCLE</span>
+            <h3>Pre / PostCompact</h3>
+            <p>在 context 重写边界执行记录、验证或停止 policy。</p>
+          </article>
+          <article class="hook-boundary">
+            <span>BEFORE COMPLETION</span>
+            <h3>Stop / SubagentStop</h3>
+            <p>最终消息只是停止候选；hook 可以注入 continuation fragment。</p>
+          </article>
+        </div>
+
+        <div class="feature-example-grid">
+          <div class="loop-code feature-code" aria-label="带 hooks 与 loop policy 的伪代码">
+            <div class="loop-code-head"><span>POLICY-WRAPPED LOOP</span><span>PSEUDOCODE</span></div>
+            <pre><span class="code-add">input ← session_and_prompt_hooks(input)</span>
+state ← record_input(state, input)
+
+<span class="code-kw">while</span> true:
+    view ← build_context(state)
+<span class="stable-core">    decision ← LLM(view, tools)</span>
+
+    <span class="code-kw">if</span> decision is Final:
+<span class="code-add orange">        outcome ← stop_hooks(state, decision)</span>
+<span class="code-add orange">        if outcome requests continuation:</span>
+<span class="code-add orange">            state ← record(outcome.context)</span>
+<span class="code-add orange">            continue</span>
+        return decision.answer
+
+<span class="code-add">    action ← pre_tool_hooks(</span>
+<span class="code-add">        decision.tool_call, state</span>
+<span class="code-add">    )</span>
+    observation ← Runtime.execute(action)
+<span class="code-add">    observation ← post_tool_hooks(</span>
+<span class="code-add">        observation, state</span>
+<span class="code-add">    )</span>
+    state ← update(state, observation)
+<span class="code-add">    state ← compact_hooks_if_needed(state)</span></pre>
+          </div>
+
+          <div class="state-diff-panel">
+            <article class="state-diff-card after">
+              <span class="diff-label">CONTROL STATE</span>
+              <h3>Policy 也必须成为 State</h3>
+              <p>否则 runtime 无法解释为什么某个 action 被阻止、为什么继续 sampling，或为什么达到 token 阈值后先 compact。</p>
+              <div class="policy-state">
+                <span>permissions</span><span>retry budget</span><span>pending input</span>
+                <span>obligations</span><span>verification</span><span>stop status</span>
+              </div>
+            </article>
+            <article class="state-diff-card">
+              <span class="diff-label">SAME MODEL, DIFFERENT LOOP</span>
+              <pre class="state-tree">same LLM
++ different projection policy
++ different approval policy
++ different verification gates
++ different retry / stop policy
+= different Agent behavior</pre>
+            </article>
+          </div>
+        </div>
+
+        <div class="source-evidence-grid">
+          <div class="source-block">
+            <div class="source-head"><span>hook_runtime.rs · action boundary</span><span>source surface</span></div>
+            <pre><span class="fn">run_pre_tool_use_hooks</span>(...)
+<span class="fn">run_permission_request_hooks</span>(...)
+<span class="fn">run_post_tool_use_hooks</span>(...)</pre>
+          </div>
+          <div class="source-block">
+            <div class="source-head"><span>hook_runtime.rs · lifecycle boundary</span><span>source surface</span></div>
+            <pre><span class="fn">run_turn_stop_hooks</span>(...)
+<span class="fn">run_pre_compact_hooks</span>(...)
+<span class="fn">run_post_compact_hooks</span>(...)</pre>
+          </div>
+        </div>
+
+        <div class="big-claim">同一个模型、同一组工具，只要 Transition Policy 不同，就可能形成完全不同的 Agent。<em>Loop Engineering 的主要对象是 State Machine，而不是一句更神奇的 Prompt。</em></div>
+      </section>
+
+      <section class="chapter" id="unified-loop">
+        <div class="chapter-head">
+          <div class="chapter-no">11</div>
+          <h2>回到最初的 Loop：Feature 到底加在哪里？</h2>
+        </div>
+        <p class="chapter-intro">把所有功能放回第一页的伪代码，会发现最小循环没有被推翻。扩张发生在模型调用之前、之后和分支处；中间那行 <code>LLM(view, tools)</code> 基本保持稳定。</p>
+
+        <div class="unified-loop-grid">
+          <div class="loop-code feature-code" aria-label="整合 MCP Skill Subagent Hooks 的 Agent Loop">
+            <div class="loop-code-head"><span>ONE LOOP · SIX EXTENSION POINTS</span><span>FINAL PSEUDOCODE</span></div>
+            <pre><span class="code-add">state ← initialize(</span>
+<span class="code-add">    request, memory, checkpoint, policy</span>
+<span class="code-add">)</span>
+<span class="code-add">tools ← local_tools ∪ discover_mcp_tools()</span>
+
+<span class="code-kw">while</span> true:
+<span class="code-add">    skills ← select_relevant_skills(state)</span>
+<span class="code-add">    view ← build_context(state, skills)</span>
+<span class="stable-core">    decision ← LLM(view, tools)</span>
+
+    <span class="code-kw">if</span> decision is Final:
+<span class="code-add orange">        if completion_policy(state, decision):</span>
+            <span class="code-kw">return</span> decision.answer
+<span class="code-add orange">        state ← record_missing_obligation(state)</span>
+<span class="code-add orange">        continue</span>
+
+<span class="code-add">    action ← before_action_hooks(</span>
+<span class="code-add">        decision.tool_call, state</span>
+<span class="code-add">    )</span>
+
+<span class="code-add orange">    if action is spawn_agent:</span>
+<span class="code-add orange">        observation ← AgentLoop(</span>
+<span class="code-add orange">            fork_state(state, action.task)</span>
+<span class="code-add orange">        )</span>
+<span class="code-add orange">    else if action is MCP:</span>
+<span class="code-add orange">        observation ← MCP.call(action)</span>
+    else:
+        observation ← Runtime.execute(action)
+
+<span class="code-add">    observation ← after_action_hooks(</span>
+<span class="code-add">        observation, state</span>
+<span class="code-add">    )</span>
+<span class="code-add">    state ← update_and_validate(</span>
+<span class="code-add">        state, action, observation</span>
+<span class="code-add">    )</span>
+<span class="code-add">    state ← compact_or_checkpoint(state)</span></pre>
+          </div>
+
+          <div class="extension-summary">
+            <article class="core">
+              <span class="tag">STABLE CORE</span>
+              <h3>Model Call 几乎不变</h3>
+              <p>它仍然接收一次 projection 和一组 tool schemas，然后产生 final 或 action proposal。</p>
+            </article>
+            <article>
+              <span class="tag blue">BEFORE MODEL</span>
+              <h3>State preparation 变复杂</h3>
+              <p>恢复 memory、发现 MCP tools、选择 Skill、裁剪 history 与构造本轮 view。</p>
+            </article>
+            <article>
+              <span class="tag orange">AFTER MODEL</span>
+              <h3>Transition runtime 变复杂</h3>
+              <p>授权、路由、subagent recursion、observation shaping、validation 与 checkpoint。</p>
+            </article>
+            <article>
+              <span class="tag">COMPLETION</span>
+              <h3>Final 只是停止候选</h3>
+              <p>测试证据、未完成 obligation、hook 与 completion policy 共同决定是否真正结束。</p>
+            </article>
+          </div>
+        </div>
+
+        <table class="feature-mapping" aria-label="Feature 与 Agent Loop 修改位置的对应关系">
+          <thead>
+            <tr><th>Feature</th><th>伪代码位置</th><th>主要 State 变化</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>MCP</td><td>discover tools + execute</td><td>capability catalog、外部 observation 与 provenance</td></tr>
+            <tr><td>Skill</td><td>select + build_context</td><td>可复用 procedure 与 progressive projection</td></tr>
+            <tr><td>Subagent</td><td>fork + recursive loop + merge</td><td>线性 trajectory 变成有 lineage 的 State Graph</td></tr>
+            <tr><td>Hooks</td><td>before / after action + stop</td><td>可插入的 lifecycle decision 与 policy outcome</td></tr>
+            <tr><td>Memory / Compact</td><td>initialize + project + update</td><td>长期保存、派生 view、恢复与 token-bound representation</td></tr>
+            <tr><td>Harness / Loop Engineering</td><td>整个 while 与 completion policy</td><td>状态转移、验证、重试、预算和停止规则</td></tr>
+          </tbody>
+        </table>
+
+        <div class="big-claim">这些 Feature 几乎没有改变 <em>LLM(view, tools)</em>。真正持续变复杂的是模型周围的 State Runtime。</div>
+
+        <div class="boundary">
+          <div class="codex">
+            <span class="tag">CODE AGENT</span>
+            <h3>当前 Runtime 的核心问题</h3>
+            <p>下一次模型调用应该看到什么、允许做什么，以及 observation 如何改变后续决策？</p>
+          </div>
+          <div class="bridge-arrow">→</div>
+          <div class="agentdb">
+            <span class="tag orange">NEXT · AGENTDB</span>
+            <h3>当 State 开始覆盖共享 World</h3>
+            <p>跨会话、跨 Agent、跨用户的 evidence、conflict、obligation、projection 与 recovery，就从 Agent 实现细节变成 data-management 问题。</p>
+          </div>
+        </div>
+
+        <div class="report-sources">
+          <h3>Sources and claim boundary</h3>
+          <ul class="source-list">
+            <li><a href="https://developers.openai.com/codex/codex-manual.md" target="_blank" rel="noopener">OpenAI Codex Manual</a><span>Codex customization、Skills、MCP、Subagents 与 Hooks 的当前公开产品语义。</span></li>
+            <li><a href="https://github.com/openai/codex/blob/cca16a108782/codex-rs/core/src/session/turn.rs" target="_blank" rel="noopener">session/turn.rs</a><span>Skill injection、MCP tool exposure、ToolRouter 与 turn loop 的本地源码快照。</span></li>
+            <li><a href="https://github.com/openai/codex/blob/cca16a108782/codex-rs/core/src/tools/handlers/multi_agents_v2/spawn.rs" target="_blank" rel="noopener">multi_agents_v2/spawn.rs</a><span>fork mode、parent thread、spawn source 与 child-agent runtime 配置。</span></li>
+            <li><a href="https://github.com/openai/codex/blob/cca16a108782/codex-rs/core/src/hook_runtime.rs" target="_blank" rel="noopener">hook_runtime.rs</a><span>PreToolUse、PostToolUse、Stop 与 compaction lifecycle hooks。</span></li>
+            <li><code>W / S / P + five state operations</code><span>本文基于实现抽取的研究与教学抽象，不是 Codex 源码中的单一类型或官方术语。</span></li>
+          </ul>
+        </div>
+      </section>
+
+      <section class="end-note" aria-label="报告结论">
+        <p>Code Agent 的能力增长，表面上是 MCP、Skill、Subagent 与 Hooks；实现上则是 State 的边界、结构、拓扑与转移策略不断扩张。</p>
+      </section>
+
+      <footer>Code Agent Research · Tutorial 01 · Source-grounded against local Codex commit cca16a108782 · 2026-07-15</footer>
+    </main>
+  </div>
+
+  <script>
+    (() => {
+      const bar = document.getElementById('progressBar');
+      const links = [...document.querySelectorAll('.toc a')];
+      const sections = links.map(link => document.querySelector(link.getAttribute('href'))).filter(Boolean);
+
+      const updateProgress = () => {
+        const max = document.documentElement.scrollHeight - window.innerHeight;
+        const pct = max > 0 ? Math.min(100, Math.max(0, window.scrollY / max * 100)) : 0;
+        bar.style.width = `${pct}%`;
+      };
+      updateProgress();
+      window.addEventListener('scroll', updateProgress, { passive: true });
+      window.addEventListener('resize', updateProgress);
+
+      const observer = new IntersectionObserver(entries => {
+        const visible = entries
+          .filter(entry => entry.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (!visible) return;
+        links.forEach(link => link.classList.toggle('active', link.getAttribute('href') === `#${visible.target.id}`));
+      }, { rootMargin: '-12% 0px -68% 0px', threshold: [0, .15, .5] });
+      sections.forEach(section => observer.observe(section));
+    })();
+  </script>
+</body>
+</html>

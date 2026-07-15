@@ -1,0 +1,556 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Code Agent 系列教程：从 Codex 实现、AgentDB 系统视角到务实的 Agent 使用方法。">
+  <meta name="theme-color" content="#17283d">
+  <title>Code Agent Tutorial｜从实现到实践</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f7f6f2;
+      --surface: #ffffff;
+      --ink: #17283d;
+      --muted: #607184;
+      --line: #d8e0e5;
+      --teal: #0f766e;
+      --teal-soft: #e6f4f0;
+      --blue: #315f94;
+      --blue-soft: #eaf1fb;
+      --orange: #ad4d23;
+      --orange-soft: #fff1e7;
+      --navy: #17283d;
+      --shadow: 0 24px 64px rgba(23, 40, 61, .09);
+      --radius: 28px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; background: var(--paper); }
+    body {
+      margin: 0;
+      min-width: 320px;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 8% 2%, rgba(15, 118, 110, .09), transparent 27rem),
+        radial-gradient(circle at 92% 8%, rgba(49, 95, 148, .08), transparent 30rem),
+        var(--paper);
+      font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
+      font-size: 17px;
+      line-height: 1.7;
+      text-rendering: optimizeLegibility;
+    }
+
+    a { color: inherit; }
+    code, .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; }
+
+    .shell {
+      width: min(1240px, calc(100% - 48px));
+      margin: 0 auto;
+    }
+
+    .site-nav {
+      min-height: 78px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }
+    .brand {
+      display: inline-flex;
+      align-items: center;
+      gap: 12px;
+      font-size: 13px;
+      font-weight: 850;
+      letter-spacing: .13em;
+      text-transform: uppercase;
+    }
+    .brand-mark {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 0 0 6px rgba(15, 118, 110, .12);
+    }
+    .repo-link {
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 700;
+    }
+    .repo-link:hover { color: var(--teal); }
+
+    .hero {
+      position: relative;
+      isolation: isolate;
+      min-height: 610px;
+      padding: clamp(48px, 8vw, 104px);
+      display: grid;
+      align-content: center;
+      border-radius: 34px;
+      color: #f8fbff;
+      background: linear-gradient(135deg, #13263a 0%, #17283d 58%, #203a51 100%);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+    .hero::before {
+      position: absolute;
+      z-index: -2;
+      inset: 0;
+      content: "";
+      opacity: .22;
+      background-image:
+        linear-gradient(rgba(255,255,255,.13) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.13) 1px, transparent 1px);
+      background-size: 52px 52px;
+      mask-image: linear-gradient(90deg, transparent, #000 58%);
+    }
+    .hero::after {
+      position: absolute;
+      z-index: -1;
+      width: 430px;
+      height: 430px;
+      right: -110px;
+      top: -130px;
+      content: "";
+      border-radius: 50%;
+      border: 1px solid rgba(128, 225, 209, .35);
+      box-shadow:
+        0 0 0 64px rgba(49, 95, 148, .10),
+        0 0 0 128px rgba(255,255,255,.025);
+    }
+    .eyebrow {
+      margin: 0 0 22px;
+      color: #80e1d1;
+      font-size: 13px;
+      font-weight: 850;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+    h1 {
+      max-width: 920px;
+      margin: 0;
+      font-size: clamp(45px, 7vw, 88px);
+      line-height: 1.06;
+      letter-spacing: -.052em;
+    }
+    .hero-lede {
+      max-width: 750px;
+      margin: 28px 0 0;
+      color: #c7d5e2;
+      font-size: clamp(18px, 2vw, 24px);
+      line-height: 1.58;
+    }
+    .core-model {
+      width: fit-content;
+      max-width: 100%;
+      margin-top: 54px;
+      padding: 18px 22px;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px 15px;
+      border: 1px solid rgba(128, 225, 209, .25);
+      border-radius: 16px;
+      color: #dce9f4;
+      background: rgba(4, 15, 28, .28);
+      font-size: clamp(14px, 1.35vw, 17px);
+      backdrop-filter: blur(10px);
+    }
+    .core-model strong { color: #80e1d1; }
+
+    .argument {
+      margin: 34px 0 0;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      border: 1px solid rgba(216, 224, 229, .8);
+      border-radius: 22px;
+      background: rgba(255,255,255,.72);
+      overflow: hidden;
+      box-shadow: 0 10px 34px rgba(23, 40, 61, .05);
+    }
+    .argument-step {
+      position: relative;
+      min-height: 112px;
+      padding: 24px 26px;
+    }
+    .argument-step + .argument-step { border-left: 1px solid var(--line); }
+    .argument-step + .argument-step::before {
+      position: absolute;
+      left: -12px;
+      top: 43px;
+      width: 22px;
+      height: 22px;
+      content: "→";
+      display: grid;
+      place-items: center;
+      color: var(--teal);
+      border-radius: 50%;
+      background: var(--paper);
+      font-size: 14px;
+      font-weight: 900;
+    }
+    .argument-no {
+      display: block;
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 850;
+      letter-spacing: .12em;
+    }
+    .argument-step strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 17px;
+    }
+    .argument-step span:last-child {
+      display: block;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .collection {
+      padding: clamp(76px, 10vw, 128px) 0 100px;
+    }
+    .section-head {
+      max-width: 800px;
+      margin-bottom: 38px;
+    }
+    .section-label {
+      margin: 0 0 12px;
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 850;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+    h2 {
+      margin: 0;
+      font-size: clamp(34px, 5vw, 54px);
+      line-height: 1.15;
+      letter-spacing: -.035em;
+    }
+    .section-copy {
+      margin: 18px 0 0;
+      color: var(--muted);
+      font-size: 18px;
+    }
+
+    .tutorial-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 22px;
+    }
+    .tutorial-card {
+      position: relative;
+      min-height: 520px;
+      padding: 30px;
+      display: flex;
+      flex-direction: column;
+      border: 1px solid rgba(115, 133, 149, .22);
+      border-radius: var(--radius);
+      background: rgba(255,255,255,.9);
+      box-shadow: 0 16px 42px rgba(23, 40, 61, .055);
+      overflow: hidden;
+      transition: transform .2s ease, box-shadow .2s ease, border-color .2s ease;
+    }
+    .tutorial-card::before {
+      position: absolute;
+      inset: 0 0 auto;
+      height: 5px;
+      content: "";
+      background: var(--card-accent, var(--teal));
+    }
+    .tutorial-card[data-state="ready"]:hover {
+      transform: translateY(-4px);
+      border-color: rgba(15, 118, 110, .4);
+      box-shadow: 0 24px 56px rgba(23, 40, 61, .10);
+    }
+    .tutorial-card[data-unit="2"] { --card-accent: var(--blue); }
+    .tutorial-card[data-unit="3"] { --card-accent: var(--orange); }
+    .tutorial-card[data-state="pending"] { background: rgba(255,255,255,.64); }
+
+    .card-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    .unit-no {
+      color: var(--card-accent, var(--teal));
+      font-size: 13px;
+      font-weight: 900;
+      letter-spacing: .12em;
+    }
+    .status {
+      padding: 6px 10px;
+      color: var(--muted);
+      border-radius: 999px;
+      background: #eef1f3;
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    [data-state="ready"] .status {
+      color: var(--teal);
+      background: var(--teal-soft);
+    }
+    .tutorial-card h3 {
+      margin: 36px 0 0;
+      font-size: clamp(27px, 2.7vw, 38px);
+      line-height: 1.16;
+      letter-spacing: -.035em;
+    }
+    .card-subtitle {
+      margin: 15px 0 0;
+      color: var(--card-accent, var(--teal));
+      font-size: 15px;
+      font-weight: 750;
+      line-height: 1.5;
+    }
+    .card-copy {
+      margin: 22px 0 0;
+      color: var(--muted);
+      font-size: 15px;
+    }
+    .card-tags {
+      margin: 24px 0 30px;
+      padding: 0;
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      list-style: none;
+    }
+    .card-tags li {
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--paper);
+      font-family: "SFMono-Regular", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .card-action {
+      min-height: 48px;
+      margin-top: auto;
+      padding: 12px 16px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      color: #fff;
+      border-radius: 14px;
+      background: var(--navy);
+      text-decoration: none;
+      font-size: 14px;
+      font-weight: 800;
+    }
+    .card-action::after { content: "↗"; font-size: 18px; }
+    [data-state="pending"] .card-action,
+    [data-state="checking"] .card-action {
+      color: #82909d;
+      background: #edf0f2;
+      cursor: default;
+    }
+    [data-state="pending"] .card-action::after,
+    [data-state="checking"] .card-action::after { content: "—"; }
+    .card-action:focus-visible,
+    .repo-link:focus-visible {
+      outline: 3px solid rgba(15, 118, 110, .35);
+      outline-offset: 4px;
+    }
+
+    .reading-note {
+      margin-top: 34px;
+      padding: 26px 28px;
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 18px;
+      align-items: start;
+      border-left: 4px solid var(--teal);
+      border-radius: 0 18px 18px 0;
+      background: var(--teal-soft);
+    }
+    .reading-note strong { color: var(--teal); }
+    .reading-note p { margin: 0; }
+
+    footer {
+      padding: 26px 0 44px;
+      display: flex;
+      justify-content: space-between;
+      gap: 24px;
+      color: var(--muted);
+      border-top: 1px solid var(--line);
+      font-size: 13px;
+    }
+
+    @media (max-width: 920px) {
+      .argument { grid-template-columns: 1fr; }
+      .argument-step + .argument-step { border-left: 0; border-top: 1px solid var(--line); }
+      .argument-step + .argument-step::before {
+        left: 50%;
+        top: -12px;
+        transform: translateX(-50%);
+        content: "↓";
+      }
+      .tutorial-grid { grid-template-columns: 1fr; }
+      .tutorial-card { min-height: 0; }
+    }
+
+    @media (max-width: 620px) {
+      body { font-size: 16px; }
+      .shell { width: min(100% - 28px, 1240px); }
+      .site-nav { min-height: 66px; }
+      .repo-link span { display: none; }
+      .hero {
+        min-height: 570px;
+        padding: 38px 24px;
+        border-radius: 24px;
+      }
+      .hero::after { width: 300px; height: 300px; right: -160px; top: -90px; }
+      h1 { font-size: clamp(42px, 13.4vw, 62px); }
+      .hero-lede { font-size: 18px; }
+      .core-model { margin-top: 38px; padding: 15px 16px; }
+      .argument-step { padding: 20px; }
+      .collection { padding: 76px 0; }
+      .tutorial-card { padding: 25px; border-radius: 22px; }
+      .tutorial-card h3 { margin-top: 28px; font-size: 31px; }
+      .reading-note { grid-template-columns: 1fr; padding: 22px; }
+      footer { flex-direction: column; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      .tutorial-card { transition: none; }
+    }
+  </style>
+</head>
+<body>
+  <nav class="site-nav shell" aria-label="站点导航">
+    <div class="brand"><span class="brand-mark" aria-hidden="true"></span>Code Agent Tutorial</div>
+    <a class="repo-link" href="https://github.com/QIANSUIMINGMINGMING/code-agent-tutorials">GitHub <span>Repository</span> ↗</a>
+  </nav>
+
+  <main>
+    <header class="hero shell">
+      <p class="eyebrow">Three units · one continuous argument</p>
+      <h1>从 Agent 如何工作，<br>走到如何把它用对</h1>
+      <p class="hero-lede">这套教程从 Codex 的真实实现出发，逐步建立 Agent Loop 的系统模型、AgentDB 的数据管理视角，以及面向日常工作的使用判断。</p>
+      <div class="core-model mono" aria-label="教程的核心模型">
+        <strong>Code-agent behavior</strong><span>= state content + state-changing policy</span>
+      </div>
+    </header>
+
+    <div class="argument shell" aria-label="三部分论证路径">
+      <div class="argument-step">
+        <span class="argument-no mono">01 · IMPLEMENTATION</span>
+        <strong>先看运行时怎样工作</strong>
+        <span>state、projection、proposal 与 transition</span>
+      </div>
+      <div class="argument-step">
+        <span class="argument-no mono">02 · SYSTEM</span>
+        <strong>再看长期工作怎样被管理</strong>
+        <span>shared world、validation 与 commit</span>
+      </div>
+      <div class="argument-step">
+        <span class="argument-no mono">03 · PRACTICE</span>
+        <strong>最后回到用户怎样做判断</strong>
+        <span>看见了什么、能做什么、如何验对</span>
+      </div>
+    </div>
+
+    <section class="collection shell" aria-labelledby="collection-title">
+      <div class="section-head">
+        <p class="section-label">Tutorial collection</p>
+        <h2 id="collection-title">三部分，形成一条完整路径</h2>
+        <p class="section-copy">建议按顺序阅读。每一部分既可用于现场讲授，也可以独立阅读；后续页面发布后会自动出现在这里。</p>
+      </div>
+
+      <div class="tutorial-grid">
+        <article class="tutorial-card" data-unit="1" data-state="ready">
+          <div class="card-top">
+            <span class="unit-no mono">TUTORIAL 01</span>
+            <span class="status">已发布</span>
+          </div>
+          <h3>Agent<br>如何工作</h3>
+          <p class="card-subtitle">基于 Codex 的实现分析</p>
+          <p class="card-copy">从最小 Agent Loop 开始，沿真实源码理解 prompt projection、tool execution、observation write-back、MCP、Skill、Subagent 与 Hooks。</p>
+          <ul class="card-tags" aria-label="Tutorial 1 关键词">
+            <li>STATE</li><li>POLICY</li><li>RUNTIME</li><li>CODEX</li>
+          </ul>
+          <a class="card-action" href="tutorials/01-codex-agent-loop/">开始阅读</a>
+        </article>
+
+        <article class="tutorial-card" data-unit="2" data-state="checking" data-route="tutorials/02-agentdb-workloads/">
+          <div class="card-top">
+            <span class="unit-no mono">TUTORIAL 02</span>
+            <span class="status" aria-live="polite">检查中</span>
+          </div>
+          <h3>当 Agent Loop 成为系统工作负载</h3>
+          <p class="card-subtitle">从 Agent-native workload 到 AgentDB</p>
+          <p class="card-copy">把一次次模型调用放回长期、共享且持续变化的 World 中，理解 projection、optimizer、transaction、validation 与 commit 为什么成为数据管理问题。</p>
+          <ul class="card-tags" aria-label="Tutorial 2 关键词">
+            <li>WORLD</li><li>PROJECTION</li><li>AGENTDB</li>
+          </ul>
+          <a class="card-action" aria-disabled="true">正在制作</a>
+        </article>
+
+        <article class="tutorial-card" data-unit="3" data-state="checking" data-route="tutorials/03-agent-use-practice/">
+          <div class="card-top">
+            <span class="unit-no mono">TUTORIAL 03</span>
+            <span class="status" aria-live="polite">检查中</span>
+          </div>
+          <h3>怎样把 Code Agent 用对</h3>
+          <p class="card-subtitle">从运行机制回到务实判断</p>
+          <p class="card-copy">站在用户一侧追问：这次模型究竟看到了哪些信息？能力边界在哪里？又该用什么外部证据判断任务是否真的完成？</p>
+          <ul class="card-tags" aria-label="Tutorial 3 关键词">
+            <li>PROMPT</li><li>BOUNDARY</li><li>EVIDENCE</li>
+          </ul>
+          <a class="card-action" aria-disabled="true">正在制作</a>
+        </article>
+      </div>
+
+      <aside class="reading-note">
+        <strong class="mono">READING PATH</strong>
+        <p>如果只想先建立工作模型，从 Tutorial 01 开始；如果已经熟悉 code agent 的基本操作，也仍建议先读 01，因为后两部分统一使用其中的 <strong>state + policy</strong> 语言。</p>
+      </aside>
+    </section>
+  </main>
+
+  <footer class="shell">
+    <span>Code Agent Research · Self-contained teaching material</span>
+    <span class="mono">Last updated · 2026-07-15</span>
+  </footer>
+
+  <script>
+    const cards = document.querySelectorAll('.tutorial-card[data-route]');
+
+    async function detectPublished(card) {
+      const route = card.dataset.route;
+      const status = card.querySelector('.status');
+      const action = card.querySelector('.card-action');
+
+      try {
+        const response = await fetch(`${route}status.json`, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const release = await response.json();
+        if (release.published !== true) throw new Error('Not published');
+
+        card.dataset.state = 'ready';
+        status.textContent = '已发布';
+        action.textContent = '开始阅读';
+        action.href = route;
+        action.removeAttribute('aria-disabled');
+      } catch (_error) {
+        card.dataset.state = 'pending';
+        status.textContent = '制作中';
+        action.textContent = '尚未发布';
+        action.removeAttribute('href');
+        action.setAttribute('aria-disabled', 'true');
+      }
+    }
+
+    cards.forEach(detectPublished);
+  </script>
+</body>
+</html>
